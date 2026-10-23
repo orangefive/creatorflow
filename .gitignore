@@ -1,0 +1,31 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# 本地环境
+.env
+.env.local
+*.local
+
+# 编辑器与系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志与临时文件
+*.log
+app-icon.tmp.png
+
+# 本机 Cargo 镜像加速配置（不入库）
+.cargo/config.toml
+
+# 本地规划文档与阶段报告（不属于项目源码）
+CreatorFlow_*.md
+docs/phase1-report.md
+
+# 本地工具与工作记录
+.workbuddy/

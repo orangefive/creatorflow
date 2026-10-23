@@ -1,0 +1,8 @@
+# 统一使用 LF，避免跨平台换行差异
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.jpeg binary

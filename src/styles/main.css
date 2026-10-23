@@ -1,0 +1,114 @@
+:root {
+  --cf-bg: #f6f7f9;
+  --cf-surface: #ffffff;
+  --cf-border: #e5e7eb;
+  --cf-text: #1f2937;
+  --cf-text-muted: #6b7280;
+  --cf-accent: #3f6ad8;
+  --cf-sidebar-bg: #ffffff;
+  --cf-radius: 10px;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, -apple-system,
+    sans-serif;
+  font-size: 14px;
+  color: var(--cf-text);
+  background: var(--cf-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  overflow: hidden;
+}
+
+a {
+  color: var(--cf-accent);
+  text-decoration: none;
+}
+
+.cf-page {
+  padding: 24px 28px 32px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.cf-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.cf-page-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.cf-page-subtitle {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--cf-text-muted);
+}
+
+.cf-card {
+  background: var(--cf-surface);
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius);
+}
+
+.cf-muted {
+  color: var(--cf-text-muted);
+}
+
+.cf-empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--cf-text-muted);
+}
+
+.cf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.cf-spacer {
+  flex: 1;
+}
+
+/* Element Plus 细节微调，保持克制的桌面观感 */
+.el-button {
+  font-weight: 500;
+}
+
+.el-table th.el-table__cell {
+  background: #fafbfc !important;
+  color: var(--cf-text-muted);
+  font-weight: 600;
+}
+
+.el-drawer__header {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--cf-border);
+}

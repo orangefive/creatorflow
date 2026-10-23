@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "CreatorFlow 主窗口最小权限集：仅允许事件通信与系统文件/目录选择对话框",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open"]
+}
