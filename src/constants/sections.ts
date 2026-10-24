@@ -1,4 +1,4 @@
-import type { MediaKind, SectionKey, WorkStatus } from '@/types'
+import type { AssetStatus, MediaKind, SectionKey, WorkStatus } from '@/types'
 
 export interface SectionMeta {
   key: SectionKey
@@ -145,4 +145,19 @@ export const MEDIA_KIND_LABEL: Record<MediaKind, string> = {
   video: '视频',
   image: '图片',
   other: '其他',
+}
+
+export const MEDIA_KIND_OPTIONS: Array<{ value: MediaKind; label: string }> = (
+  Object.keys(MEDIA_KIND_LABEL) as MediaKind[]
+).map((value) => ({ value, label: MEDIA_KIND_LABEL[value] }))
+
+export const ASSET_STATUS_META: Record<
+  AssetStatus,
+  { label: string; type: 'success' | 'info' | 'warning' | 'danger' }
+> = {
+  ready: { label: '正常', type: 'success' },
+  missing: { label: '文件缺失', type: 'danger' },
+  importing: { label: '导入中', type: 'warning' },
+  failed: { label: '导入失败', type: 'danger' },
+  trashed: { label: '已移除', type: 'info' },
 }

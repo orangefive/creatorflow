@@ -34,14 +34,26 @@
           />
         </el-select>
         <el-button :loading="works.loading" @click="reload">刷新</el-button>
-        <el-button
-          :disabled="work?.status === 'archived'"
-          @click="archive"
-        >
-          归档
-        </el-button>
+        <el-button v-if="work?.status === 'archived'" @click="unarchive">恢复归档</el-button>
+        <el-button v-else @click="archive">归档</el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="work?.status === 'archived'"
+      class="notice"
+      type="info"
+      :closable="false"
+      show-icon
+      title="该作品已归档"
+    >
+      <template #default>
+        <span class="archived-hint">
+          归档只改变应用内的状态，磁盘上的文件夹与素材没有变动。
+        </span>
+        <el-button size="small" text type="primary" @click="unarchive">立即恢复</el-button>
+      </template>
+    </el-alert>
 
     <el-alert
       v-if="works.error"
@@ -75,6 +87,7 @@
         :key="`${work.id}-${activeSection}`"
         :work-id="work.id"
         :section-key="activeSection"
+        @changed="reload"
       />
       <div v-else class="cf-empty">作品不存在或已被移除</div>
     </div>
@@ -82,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChevronLeft, FileText, AudioLines, Image as ImageIcon, Video } from '@lucide/vue'
@@ -95,6 +108,7 @@ import {
 } from '@/constants/sections'
 import { useSettingsStore } from '@/stores/settings'
 import { useWorksStore } from '@/stores/works'
+import { useImportsStore } from '@/stores/imports'
 import { isTauriRuntime } from '@/services/ipc'
 import type { SectionKey, WorkStatus } from '@/types'
 
@@ -102,6 +116,7 @@ const route = useRoute()
 const router = useRouter()
 const works = useWorksStore()
 const settings = useSettingsStore()
+const imports = useImportsStore()
 const loadingWork = ref(true)
 
 const workId = computed(() => String(route.params.workId ?? ''))
@@ -171,6 +186,13 @@ async function onStatusChange(value: unknown): Promise<void> {
   else ElMessage.error(works.error ?? '状态更新失败')
 }
 
+async function unarchive(): Promise<void> {
+  if (!work.value) return
+  const ok = await works.unarchiveWork(work.value.id)
+  if (ok) ElMessage.success('已取消归档')
+  else ElMessage.error(works.error ?? '取消归档失败')
+}
+
 async function archive(): Promise<void> {
   if (!work.value) return
   try {
@@ -186,6 +208,14 @@ async function archive(): Promise<void> {
   if (ok) ElMessage.success('作品已归档')
   else ElMessage.error(works.error ?? '归档失败')
 }
+
+watch(
+  () => imports.completedSignal,
+  () => {
+    // 导入完成后刷新分区计数
+    void load()
+  },
+)
 
 onMounted(async () => {
   if (!isTauriRuntime()) {
@@ -287,6 +317,10 @@ onMounted(async () => {
 
 .notice {
   margin: 0 28px 8px;
+}
+
+.archived-hint {
+  margin-right: 8px;
 }
 
 .section-tabs {

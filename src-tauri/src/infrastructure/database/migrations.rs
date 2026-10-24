@@ -10,11 +10,28 @@ struct Migration {
 }
 
 /// 有序迁移列表：只能追加，不能修改已发布的条目。
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_initial",
-    sql: include_str!("../../../migrations/0001_initial.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_initial",
+        sql: include_str!("../../../migrations/0001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "0002_asset_metadata",
+        sql: include_str!("../../../migrations/0002_asset_metadata.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "0003_tags",
+        sql: include_str!("../../../migrations/0003_tags.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "0004_archive_restore",
+        sql: include_str!("../../../migrations/0004_archive_restore.sql"),
+    },
+];
 
 pub fn latest_version() -> i64 {
     MIGRATIONS

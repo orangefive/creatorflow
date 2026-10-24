@@ -68,6 +68,78 @@ impl AssetStatus {
     }
 }
 
+/// 元数据提取状态；不可提取不影响素材本身可用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetadataStatus {
+    Pending,
+    Ready,
+    Partial,
+    Failed,
+    Unsupported,
+}
+
+impl MetadataStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Partial => "partial",
+            Self::Failed => "failed",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    pub fn parse(value: &str) -> AppResult<Self> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "ready" => Ok(Self::Ready),
+            "partial" => Ok(Self::Partial),
+            "failed" => Ok(Self::Failed),
+            "unsupported" => Ok(Self::Unsupported),
+            other => Err(AppError::validation(format!("未知的元数据状态：{other}"))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThumbnailStatus {
+    Pending,
+    Ready,
+    Failed,
+    Unsupported,
+}
+
+impl ThumbnailStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    pub fn parse(value: &str) -> AppResult<Self> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "ready" => Ok(Self::Ready),
+            "failed" => Ok(Self::Failed),
+            "unsupported" => Ok(Self::Unsupported),
+            other => Err(AppError::validation(format!("未知的缩略图状态：{other}"))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    pub asset_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
@@ -87,6 +159,28 @@ pub struct Asset {
     pub updated_at: String,
     /// 由服务层基于作品根目录 + 相对路径解析，仅用于展示与打开文件。
     pub absolute_path: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub frame_rate: Option<f64>,
+    pub sample_rate: Option<i64>,
+    pub channels: Option<i64>,
+    pub codec: Option<String>,
+    pub sha256: Option<String>,
+    pub metadata_status: MetadataStatus,
+    pub metadata_error: Option<String>,
+    pub thumbnail_status: ThumbnailStatus,
+    pub thumbnail_relative_path: Option<String>,
+    /// 缓存目录中的绝对路径，由服务层拼接，用于前端 asset 协议显示
+    pub thumbnail_path: Option<String>,
+    pub thumbnail_error: Option<String>,
+    pub tags: Vec<Tag>,
+}
+
+impl Asset {
+    pub fn has_metadata(&self) -> bool {
+        self.width.is_some() || self.height.is_some() || self.duration_ms.is_some()
+    }
 }
 
 /// MIME 探测采用扩展名映射（MVP 不引入第三方嗅探库）。
@@ -143,6 +237,27 @@ mod tests {
             AssetStatus::Trashed,
         ] {
             assert_eq!(AssetStatus::parse(status.as_str()).unwrap(), status);
+        }
+    }
+
+    #[test]
+    fn metadata_and_thumbnail_status_roundtrip() {
+        for status in [
+            MetadataStatus::Pending,
+            MetadataStatus::Ready,
+            MetadataStatus::Partial,
+            MetadataStatus::Failed,
+            MetadataStatus::Unsupported,
+        ] {
+            assert_eq!(MetadataStatus::parse(status.as_str()).unwrap(), status);
+        }
+        for status in [
+            ThumbnailStatus::Pending,
+            ThumbnailStatus::Ready,
+            ThumbnailStatus::Failed,
+            ThumbnailStatus::Unsupported,
+        ] {
+            assert_eq!(ThumbnailStatus::parse(status.as_str()).unwrap(), status);
         }
     }
 

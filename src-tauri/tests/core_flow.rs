@@ -54,6 +54,12 @@ impl TestEnv {
         .expect("创建作品失败")
     }
 
+    fn thumbnail_cache(&self) -> PathBuf {
+        let directory = self._temp.path().join("thumbnails");
+        fs::create_dir_all(&directory).expect("创建缩略图目录失败");
+        directory
+    }
+
     fn manager(&self) -> Arc<ImportManager> {
         Arc::new(ImportManager::headless(Arc::clone(&self.database)))
     }
@@ -196,8 +202,13 @@ fn import_copies_file_and_registers_asset() {
     assert!(source.is_file(), "源文件必须保留");
     assert_eq!(fs::read(&source).unwrap(), content, "源文件内容不得改变");
 
-    let assets = asset_service::list_assets(&env.database, &work.id, Some(SectionKey::Documents))
-        .expect("查询素材失败");
+    let assets = asset_service::list_assets(
+        &env.database,
+        &work.id,
+        Some(SectionKey::Documents),
+        &env.thumbnail_cache(),
+    )
+    .expect("查询素材失败");
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].status, AssetStatus::Ready);
     assert_eq!(assets[0].size_bytes, content.len() as i64);
@@ -271,15 +282,25 @@ fn deleted_file_is_marked_missing_not_removed_from_index() {
     let target = env.root.join("缺失检测").join("04_图片").join("封面.png");
     fs::remove_file(&target).unwrap();
 
-    let assets = asset_service::list_assets(&env.database, &work.id, Some(SectionKey::Images))
-        .expect("查询素材失败");
+    let assets = asset_service::list_assets(
+        &env.database,
+        &work.id,
+        Some(SectionKey::Images),
+        &env.thumbnail_cache(),
+    )
+    .expect("查询素材失败");
     assert_eq!(assets.len(), 1, "记录不得被静默删除");
     assert_eq!(assets[0].status, AssetStatus::Missing);
 
     // 文件恢复后，列表应重新校准为 ready。
     fs::write(&target, b"fake-png-bytes").unwrap();
-    let restored = asset_service::list_assets(&env.database, &work.id, Some(SectionKey::Images))
-        .expect("查询素材失败");
+    let restored = asset_service::list_assets(
+        &env.database,
+        &work.id,
+        Some(SectionKey::Images),
+        &env.thumbnail_cache(),
+    )
+    .expect("查询素材失败");
     assert_eq!(restored[0].status, AssetStatus::Ready);
 }
 
@@ -379,8 +400,13 @@ fn startup_recovery_marks_interrupted_jobs_safely() {
     assert_eq!(interrupted_job.status, ImportStatus::Failed);
     assert_eq!(interrupted_job.error_code.as_deref(), Some("interrupted"));
 
-    let assets =
-        asset_service::list_assets(&env.database, &work.id, Some(SectionKey::Documents)).unwrap();
+    let assets = asset_service::list_assets(
+        &env.database,
+        &work.id,
+        Some(SectionKey::Documents),
+        &env.thumbnail_cache(),
+    )
+    .unwrap();
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].display_name, "已完成.md");
 }

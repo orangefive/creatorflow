@@ -6,9 +6,11 @@ use crate::domain::time::now_iso;
 use crate::errors::{AppError, AppResult};
 use crate::infrastructure::database::Database;
 use crate::repositories::settings as settings_repo;
+use crate::services::import_service::{DEFAULT_IMPORT_CONCURRENCY, MAX_IMPORT_CONCURRENCY};
 
 const KEY_WORKSPACE_ROOT: &str = "workspace_root";
 const KEY_LAST_OPENED_WORK: &str = "last_opened_work_id";
+pub const KEY_IMPORT_CONCURRENCY: &str = "import_concurrency";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,4 +77,30 @@ pub fn set_last_opened_work(database: &Database, work_id: Option<&str>) -> AppRe
         None => settings_repo::remove(connection, KEY_LAST_OPENED_WORK),
     })?;
     get_settings(database)
+}
+
+/// 读取导入并发数；配置缺失或非法时回落到默认值（2）。
+pub fn import_concurrency(database: &Database) -> AppResult<usize> {
+    let raw =
+        database.with_conn(|connection| settings_repo::get(connection, KEY_IMPORT_CONCURRENCY))?;
+    let Some(json) = raw else {
+        return Ok(DEFAULT_IMPORT_CONCURRENCY);
+    };
+    match serde_json::from_str::<usize>(&json) {
+        Ok(value) => Ok(value.clamp(1, MAX_IMPORT_CONCURRENCY)),
+        Err(error) => {
+            tracing::warn!(error = %error, "导入并发配置格式错误，使用默认值");
+            Ok(DEFAULT_IMPORT_CONCURRENCY)
+        }
+    }
+}
+
+/// 设置导入并发数，返回实际生效值（已裁剪到 1..=4）。
+pub fn set_import_concurrency(database: &Database, value: usize) -> AppResult<usize> {
+    let clamped = value.clamp(1, MAX_IMPORT_CONCURRENCY);
+    let json = serde_json::to_string(&clamped)?;
+    database.with_conn(|connection| {
+        settings_repo::set(connection, KEY_IMPORT_CONCURRENCY, &json, &now_iso())
+    })?;
+    Ok(clamped)
 }

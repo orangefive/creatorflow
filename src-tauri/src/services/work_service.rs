@@ -10,7 +10,8 @@ use crate::domain::work::{validate_work_name, Work, WorkManifest, WorkStatus};
 use crate::errors::{AppError, AppResult};
 use crate::infrastructure::database::Database;
 use crate::infrastructure::filesystem;
-use crate::repositories::{activity, sections, works};
+use crate::infrastructure::recycle_bin;
+use crate::repositories::{activity, assets, sections, works};
 use crate::services::settings_service;
 
 pub const MANIFEST_FILE_NAME: &str = "creatorflow.manifest.json";
@@ -115,6 +116,7 @@ pub fn create_work(database: &Database, input: CreateWorkInput) -> AppResult<Wor
         created_at: created_at.clone(),
         updated_at: created_at.clone(),
         archived_at: None,
+        archived_from_status: None,
         asset_count: 0,
     };
 
@@ -323,8 +325,11 @@ pub fn archive_work(database: &Database, work_id: &str) -> AppResult<Work> {
         return Ok(work);
     }
     let now = now_iso();
+    let previous = work.status.as_str();
     database.with_conn(|connection| {
         works::update_status(connection, work_id, WorkStatus::Archived, &now, Some(&now))?;
+        // 记住归档前的状态，取消归档时按它恢复
+        works::set_archived_from(connection, work_id, Some(previous))?;
         activity::record_best_effort(
             connection,
             Some(work_id),
@@ -336,4 +341,78 @@ pub fn archive_work(database: &Database, work_id: &str) -> AppResult<Work> {
         Ok(())
     })?;
     get_work(database, work_id)
+}
+
+/// 取消归档：恢复到归档前的状态；旧数据没有记录时回落到「构思中」。
+pub fn unarchive_work(database: &Database, work_id: &str) -> AppResult<Work> {
+    let work = get_work(database, work_id)?;
+    if work.status != WorkStatus::Archived {
+        return Err(AppError::validation("该作品当前不在归档状态"));
+    }
+
+    let restored = work
+        .archived_from_status
+        .as_deref()
+        .and_then(|text| WorkStatus::parse(text).ok())
+        .filter(|status| status.is_user_selectable())
+        .unwrap_or(WorkStatus::Idea);
+
+    let now = now_iso();
+    database.with_conn(|connection| {
+        works::update_status(connection, work_id, restored, &now, None)?;
+        works::set_archived_from(connection, work_id, None)?;
+        activity::record_best_effort(
+            connection,
+            Some(work_id),
+            None,
+            "work.unarchived",
+            &format!("取消归档「{}」，恢复为 {}", work.name, restored.label()),
+            None,
+        );
+        Ok(())
+    })?;
+    get_work(database, work_id)
+}
+
+/// 删除作品：整个作品目录移入系统回收站，记录做软删除。
+///
+/// 顺序上先动磁盘再改库：回收站失败（文件被占用等）时直接返回错误，
+/// 数据库保持原状，不会出现「记录没了、文件还在」。
+pub fn delete_work(
+    database: &Database,
+    work_id: &str,
+    thumbnail_cache: &std::path::Path,
+) -> AppResult<()> {
+    let work = get_work(database, work_id)?;
+    let root = PathBuf::from(&work.root_path);
+    recycle_bin::move_to_recycle_bin(&root)?;
+
+    let now = now_iso();
+    let removed_assets = database.with_conn(|connection| {
+        works::soft_delete(connection, work_id, &now)?;
+        let removed = assets::soft_delete_by_work(connection, work_id, &now)?;
+        activity::record_best_effort(
+            connection,
+            Some(work_id),
+            None,
+            "work.deleted",
+            &format!(
+                "删除作品「{}」，目录已移入回收站（含 {} 个素材）",
+                work.name, removed
+            ),
+            None,
+        );
+        Ok(removed)
+    })?;
+
+    // 缩略图缓存可以直接丢弃，必要时会重新生成
+    let cache_directory = thumbnail_cache.join(work_id);
+    if cache_directory.exists() {
+        if let Err(error) = fs::remove_dir_all(&cache_directory) {
+            tracing::warn!(path = %cache_directory.display(), error = %error, "清理缩略图缓存失败");
+        }
+    }
+
+    tracing::info!(work_id, removed_assets, path = %work.root_path, "作品已删除并移入回收站");
+    Ok(())
 }

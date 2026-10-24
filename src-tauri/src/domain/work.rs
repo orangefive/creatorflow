@@ -55,6 +55,21 @@ impl WorkStatus {
         }
     }
 
+    /// 中文标签，用于活动记录等面向用户的文案。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Creating => "创建中",
+            Self::Idea => "构思中",
+            Self::Scripting => "脚本编写",
+            Self::Collecting => "素材收集",
+            Self::InProduction => "制作中",
+            Self::Review => "待审核",
+            Self::Published => "已发布",
+            Self::Archived => "已归档",
+            Self::Error => "创建失败",
+        }
+    }
+
     /// 用户可在界面上直接切换的状态；`creating`/`error`/`archived` 由系统流程控制。
     pub fn is_user_selectable(self) -> bool {
         matches!(
@@ -81,6 +96,8 @@ pub struct Work {
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
+    /// 归档前的状态，取消归档时据此恢复；旧数据可能为空
+    pub archived_from_status: Option<String>,
     pub asset_count: i64,
 }
 

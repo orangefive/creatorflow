@@ -46,6 +46,19 @@ pub async fn archive_work(state: State<'_, AppState>, work_id: String) -> AppRes
 }
 
 #[tauri::command]
+pub async fn unarchive_work(state: State<'_, AppState>, work_id: String) -> AppResult<Work> {
+    let state = state.inner().clone();
+    blocking(move || work_service::unarchive_work(&state.database, &work_id)).await
+}
+
+#[tauri::command]
+pub async fn delete_work(state: State<'_, AppState>, work_id: String) -> AppResult<()> {
+    let state = state.inner().clone();
+    let cache = state.thumbnail_cache.clone();
+    blocking(move || work_service::delete_work(&state.database, &work_id, &cache)).await
+}
+
+#[tauri::command]
 pub async fn update_work_status(
     state: State<'_, AppState>,
     work_id: String,

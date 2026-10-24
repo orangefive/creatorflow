@@ -4,6 +4,9 @@ import {
   extensionOf,
   formatBytes,
   formatDateTime,
+  formatDimensions,
+  formatDuration,
+  formatFrameRate,
   formatProgress,
   progressPercent,
 } from '@/utils/format'
@@ -65,5 +68,23 @@ describe('formatDateTime', () => {
   it('formats a valid ISO timestamp', () => {
     const formatted = formatDateTime('2026-01-02T03:04:05.000Z')
     expect(formatted).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+  })
+})
+
+describe('media formatting', () => {
+  it('formats duration in minutes and hours', () => {
+    expect(formatDuration(0)).toBe('0:00')
+    expect(formatDuration(65_000)).toBe('1:05')
+    expect(formatDuration(3_725_000)).toBe('1:02:05')
+    expect(formatDuration(null)).toBe('—')
+    expect(formatDuration(-1)).toBe('—')
+  })
+
+  it('formats dimensions and frame rate', () => {
+    expect(formatDimensions(1920, 1080)).toBe('1920 × 1080')
+    expect(formatDimensions(null, 1080)).toBe('—')
+    expect(formatFrameRate(29.97)).toBe('29.97 fps')
+    expect(formatFrameRate(25)).toBe('25 fps')
+    expect(formatFrameRate(null)).toBeNull()
   })
 })

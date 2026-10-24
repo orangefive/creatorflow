@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,10 +20,15 @@ use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::infrastructure::database::Database;
 use crate::infrastructure::filesystem;
 use crate::repositories::{activity, assets, import_jobs, sections, works};
+use crate::services::metadata_service::MetadataService;
+use crate::services::settings_service;
 
 pub const IMPORT_PROGRESS_EVENT: &str = "import://progress";
 /// 进度写库与事件节流间隔，避免大文件复制期间频繁打断 IO。
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(180);
+/// 默认并发复制任务数，同时作为硬上限（超出配置会被裁剪）。
+pub const DEFAULT_IMPORT_CONCURRENCY: usize = 2;
+pub const MAX_IMPORT_CONCURRENCY: usize = 4;
 
 /// 查询导入任务列表；`work_id` 为空时返回全部作品的任务。
 pub fn list_jobs(
@@ -49,22 +55,41 @@ pub struct PrepareImportResult {
 /**
  * 导入任务编排器。
  *
- * - 每个任务一个后台线程，文件复制不阻塞 UI 线程，也不持有数据库事务。
+ * - 固定数量的 worker 线程从队列取任务执行，默认并发 2，硬上限 4。
+ * - 文件复制不持有数据库事务，进度写库与事件都做过节流。
  * - 取消通过 `AtomicBool` 传递，复制循环每个缓冲区检查一次。
  * - `app` 为 `None` 时不发送前端事件（集成测试与故障排查使用）。
  */
 pub struct ImportManager {
     app: Option<AppHandle>,
     database: Arc<Database>,
+    metadata: Option<Arc<MetadataService>>,
     cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    sender: Mutex<Option<Sender<String>>>,
+    workers_started: AtomicBool,
+    pending: AtomicUsize,
+    active: AtomicUsize,
+    peak_active: AtomicUsize,
+    concurrency: AtomicUsize,
 }
 
 impl ImportManager {
-    pub fn new(app: AppHandle, database: Arc<Database>) -> Self {
+    pub fn new(
+        app: AppHandle,
+        database: Arc<Database>,
+        metadata: Option<Arc<MetadataService>>,
+    ) -> Self {
         Self {
             app: Some(app),
             database,
+            metadata,
             cancellations: Mutex::new(HashMap::new()),
+            sender: Mutex::new(None),
+            workers_started: AtomicBool::new(false),
+            pending: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            peak_active: AtomicUsize::new(0),
+            concurrency: AtomicUsize::new(DEFAULT_IMPORT_CONCURRENCY),
         }
     }
 
@@ -73,12 +98,43 @@ impl ImportManager {
         Self {
             app: None,
             database,
+            metadata: None,
             cancellations: Mutex::new(HashMap::new()),
+            sender: Mutex::new(None),
+            workers_started: AtomicBool::new(false),
+            pending: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            peak_active: AtomicUsize::new(0),
+            concurrency: AtomicUsize::new(DEFAULT_IMPORT_CONCURRENCY),
         }
     }
 
     pub fn database(&self) -> &Arc<Database> {
         &self.database
+    }
+
+    pub fn concurrency(&self) -> usize {
+        self.concurrency.load(Ordering::SeqCst)
+    }
+
+    #[doc(hidden)]
+    pub fn peak_concurrency(&self) -> usize {
+        self.peak_active.load(Ordering::SeqCst)
+    }
+
+    /// 等待队列清空且所有任务结束（测试使用）。
+    #[doc(hidden)]
+    pub fn wait_for_idle(&self, timeout: Duration) -> bool {
+        let started = Instant::now();
+        loop {
+            if self.active.load(Ordering::SeqCst) == 0 && self.pending.load(Ordering::SeqCst) == 0 {
+                return true;
+            }
+            if started.elapsed() > timeout {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn emit_progress(&self, job: &ImportJob) {
@@ -177,7 +233,6 @@ impl ImportManager {
         })
     }
 
-    /// 创建导入任务记录（不启动执行），供后台线程与同步测试共用。
     fn create_job_rows(
         &self,
         work_id: &str,
@@ -229,7 +284,89 @@ impl ImportManager {
         Ok(created_jobs)
     }
 
-    /// 创建导入任务并启动后台线程。
+    fn ensure_workers(self: &Arc<Self>) {
+        if self.workers_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let concurrency = settings_service::import_concurrency(&self.database)
+            .map(|value| value.clamp(1, MAX_IMPORT_CONCURRENCY))
+            .unwrap_or(DEFAULT_IMPORT_CONCURRENCY);
+        self.concurrency.store(concurrency, Ordering::SeqCst);
+
+        let (sender, receiver) = mpsc::channel::<String>();
+        match self.sender.lock() {
+            Ok(mut slot) => *slot = Some(sender),
+            Err(_) => {
+                tracing::error!("导入队列不可用");
+                return;
+            }
+        }
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        for _ in 0..concurrency {
+            let manager = Arc::clone(self);
+            let receiver = Arc::clone(&receiver);
+            std::thread::spawn(move || loop {
+                let received = match receiver.lock() {
+                    Ok(guard) => guard.recv(),
+                    Err(_) => break,
+                };
+                let Ok(job_id) = received else {
+                    break;
+                };
+
+                manager.pending.fetch_sub(1, Ordering::SeqCst);
+                let active = manager.active.fetch_add(1, Ordering::SeqCst) + 1;
+                manager.peak_active.fetch_max(active, Ordering::SeqCst);
+
+                let cancel = manager.cancellation_for(&job_id);
+                manager.run_job(&job_id, &cancel);
+
+                manager.active.fetch_sub(1, Ordering::SeqCst);
+                if let Ok(mut map) = manager.cancellations.lock() {
+                    map.remove(&job_id);
+                }
+            });
+        }
+        tracing::info!(concurrency, "导入工作线程已启动");
+    }
+
+    fn cancellation_for(&self, job_id: &str) -> Arc<AtomicBool> {
+        if let Ok(mut map) = self.cancellations.lock() {
+            return map
+                .entry(job_id.to_string())
+                .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                .clone();
+        }
+        Arc::new(AtomicBool::new(false))
+    }
+
+    fn enqueue(self: &Arc<Self>, job_id: String) {
+        self.ensure_workers();
+        self.cancellation_for(&job_id);
+        self.pending.fetch_add(1, Ordering::SeqCst);
+
+        let sender = self
+            .sender
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().cloned());
+        match sender {
+            Some(sender) => {
+                if sender.send(job_id.clone()).is_err() {
+                    self.pending.fetch_sub(1, Ordering::SeqCst);
+                    tracing::error!(job_id = %job_id, "导入任务入队失败");
+                }
+            }
+            None => {
+                self.pending.fetch_sub(1, Ordering::SeqCst);
+                tracing::error!(job_id = %job_id, "导入队列尚未就绪");
+            }
+        }
+    }
+
+    /// 创建导入任务并加入有界队列。
     pub fn start(
         self: &Arc<Self>,
         work_id: &str,
@@ -238,28 +375,12 @@ impl ImportManager {
     ) -> AppResult<Vec<ImportJob>> {
         let jobs = self.create_job_rows(work_id, section_key, source_paths)?;
         for job in &jobs {
-            self.spawn_job(job.id.clone());
+            self.enqueue(job.id.clone());
         }
         Ok(jobs)
     }
 
-    fn spawn_job(self: &Arc<Self>, job_id: String) {
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        if let Ok(mut map) = self.cancellations.lock() {
-            map.insert(job_id.clone(), Arc::clone(&cancel_flag));
-        }
-
-        let manager = Arc::clone(self);
-        let thread_job_id = job_id.clone();
-        std::thread::spawn(move || {
-            manager.run_job(&thread_job_id, &cancel_flag);
-            if let Ok(mut map) = manager.cancellations.lock() {
-                map.remove(&thread_job_id);
-            }
-        });
-    }
-
-    /// 同步执行一个任务（线程内调用；也用于集成测试）。
+    /// 同步执行一个任务（worker 内调用；也用于集成测试）。
     pub fn run_job(&self, job_id: &str, cancel: &AtomicBool) {
         if let Err(error) = self.execute_job(job_id, cancel) {
             self.finish_with_error(job_id, &error);
@@ -267,6 +388,10 @@ impl ImportManager {
     }
 
     fn execute_job(&self, job_id: &str, cancel: &AtomicBool) -> AppResult<()> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::cancelled("导入已取消"));
+        }
+
         let job = self.load_job(job_id)?;
         let (work, section) = self.database.with_conn(|connection| {
             let work = works::find(connection, &job.work_id)?
@@ -338,10 +463,13 @@ impl ImportManager {
             }
         });
 
-        if let Err(error) = copy_result {
-            let _ = filesystem::remove_file_if_exists(&temporary_path);
-            return Err(error);
-        }
+        let outcome = match copy_result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let _ = filesystem::remove_file_if_exists(&temporary_path);
+                return Err(error);
+            }
+        };
 
         self.mark_status(
             job_id,
@@ -376,6 +504,7 @@ impl ImportManager {
             &unique_name,
             &source_name,
             source_size,
+            outcome.sha256.as_deref(),
         )?;
 
         let job = self.mark_status(
@@ -386,6 +515,10 @@ impl ImportManager {
             Some(&asset_id),
         )?;
         self.emit_progress(&job);
+
+        if let Some(metadata) = &self.metadata {
+            metadata.enqueue(asset_id);
+        }
         Ok(())
     }
 
@@ -476,7 +609,7 @@ impl ImportManager {
             }
         }
 
-        // 尚未进入复制阶段的任务直接置为取消。
+        // 尚未入队的任务直接置为取消。
         self.mark_status(
             job_id,
             ImportStatus::Cancelled,
@@ -501,11 +634,11 @@ impl ImportManager {
         self.database
             .with_conn(|connection| import_jobs::reset_for_retry(connection, job_id, &now_iso()))?;
         let reset = self.load_job(job_id)?;
-        self.spawn_job(reset.id.clone());
+        self.enqueue(reset.id.clone());
         Ok(reset)
     }
 
-    /// 测试与故障排查用的同步入口：创建任务并立即逐个执行，不启动后台线程。
+    /// 测试与故障排查用的同步入口：创建任务并立即逐个执行，不占用工作线程。
     #[doc(hidden)]
     pub fn start_inline(
         self: &Arc<Self>,
@@ -533,13 +666,19 @@ fn register_asset_and_complete(
     display_name: &str,
     original_name: &str,
     size_bytes: i64,
+    sha256: Option<&str>,
 ) -> AppResult<String> {
     let now = now_iso();
     let extension = Path::new(display_name)
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase());
-    let media_kind: MediaKind = section.key.media_kind();
+    // 类型优先按扩展名判断：即使文件被放进其他分区，图片仍按图片处理
+    let media_kind: MediaKind = extension
+        .as_deref()
+        .and_then(suggest_section_for_extension)
+        .map(|key| key.media_kind())
+        .unwrap_or_else(|| section.key.media_kind());
     let mime = extension
         .as_deref()
         .map(mime_for_extension)
@@ -573,6 +712,7 @@ fn register_asset_and_complete(
                         detected_mime_type: Some(mime),
                         media_kind,
                         size_bytes,
+                        sha256: sha256.map(str::to_string),
                         status: AssetStatus::Ready,
                         created_at: now.clone(),
                         updated_at: now.clone(),
@@ -689,6 +829,7 @@ pub fn recover_incomplete_jobs(database: &Database) -> AppResult<StartupRecovery
                         &display_name,
                         &original_name,
                         actual_size,
+                        None,
                     )?;
                     report.completed_jobs += 1;
                     report.messages.push(format!(

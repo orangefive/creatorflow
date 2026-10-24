@@ -107,6 +107,37 @@ export const useWorksStore = defineStore('works', () => {
     }
   }
 
+  async function unarchiveWork(workId: string): Promise<boolean> {
+    error.value = null
+    try {
+      const restored = await workApi.unarchive(workId)
+      upsert(restored)
+      if (currentWork.value?.id === workId) {
+        currentWork.value = restored
+      }
+      return true
+    } catch (cause) {
+      error.value = toIpcError(cause).message
+      return false
+    }
+  }
+
+  async function deleteWork(workId: string): Promise<boolean> {
+    error.value = null
+    try {
+      await workApi.remove(workId)
+      works.value = works.value.filter((item) => item.id !== workId)
+      if (currentWork.value?.id === workId) {
+        currentWork.value = null
+        sections.value = []
+      }
+      return true
+    } catch (cause) {
+      error.value = toIpcError(cause).message
+      return false
+    }
+  }
+
   async function updateStatus(workId: string, status: WorkStatus): Promise<boolean> {
     error.value = null
     try {
@@ -139,6 +170,8 @@ export const useWorksStore = defineStore('works', () => {
     createWork,
     renameWork,
     archiveWork,
+    unarchiveWork,
+    deleteWork,
     updateStatus,
     reset,
   }

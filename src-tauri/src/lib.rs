@@ -13,8 +13,9 @@ use tauri::Manager;
 use crate::domain::import::StartupRecoveryReport;
 use crate::errors::AppResult;
 use crate::infrastructure::database::Database;
-use crate::infrastructure::logging;
+use crate::infrastructure::{filesystem, logging};
 use crate::services::import_service::{self, ImportManager};
+use crate::services::metadata_service::MetadataService;
 
 /// 全局应用状态：数据库、导入编排器与路径信息。
 /// 所有字段均为 `Arc`/纯数据，命令可直接 clone 到阻塞线程。
@@ -22,6 +23,8 @@ use crate::services::import_service::{self, ImportManager};
 pub struct AppState {
     pub database: Arc<Database>,
     pub imports: Arc<ImportManager>,
+    pub metadata: Arc<MetadataService>,
+    pub thumbnail_cache: PathBuf,
     pub database_path: PathBuf,
     pub log_directory: PathBuf,
     pub app_version: String,
@@ -42,6 +45,15 @@ fn initialize(app: &tauri::App) -> AppResult<AppState> {
     let database_path = data_directory.join("creatorflow.db");
     tracing::info!(path = %database_path.display(), "打开本地数据库");
     let database = Arc::new(Database::open(&database_path)?);
+
+    let cache_directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| {
+            errors::AppError::internal("无法定位缓存目录").with_detail(error.to_string())
+        })?
+        .join("thumbnails");
+    filesystem::ensure_dir(&cache_directory)?;
 
     let startup_report = match import_service::recover_incomplete_jobs(&database) {
         Ok(report) => {
@@ -66,14 +78,24 @@ fn initialize(app: &tauri::App) -> AppResult<AppState> {
         }
     };
 
+    let metadata = Arc::new(MetadataService::new(
+        Some(app.handle().clone()),
+        Arc::clone(&database),
+        cache_directory.clone(),
+    ));
+    metadata.backfill(500);
+
     let imports = Arc::new(ImportManager::new(
         app.handle().clone(),
         Arc::clone(&database),
+        Some(Arc::clone(&metadata)),
     ));
 
     Ok(AppState {
         database,
         imports,
+        metadata,
+        thumbnail_cache: cache_directory,
         database_path,
         log_directory,
         app_version: app.package_info().version.to_string(),
@@ -104,9 +126,20 @@ pub fn run() {
             commands::work_commands::get_work,
             commands::work_commands::rename_work,
             commands::work_commands::archive_work,
+            commands::work_commands::unarchive_work,
+            commands::work_commands::delete_work,
             commands::work_commands::update_work_status,
             commands::work_commands::list_sections,
             commands::asset_commands::list_assets,
+            commands::asset_commands::search_assets,
+            commands::asset_commands::relocate_asset,
+            commands::asset_commands::list_work_tags,
+            commands::asset_commands::list_asset_tags,
+            commands::asset_commands::add_asset_tag,
+            commands::asset_commands::remove_asset_tag,
+            commands::asset_commands::retry_asset_metadata,
+            commands::asset_commands::delete_asset,
+            commands::asset_commands::get_media_capabilities,
             commands::asset_commands::get_asset_preview,
             commands::asset_commands::open_asset,
             commands::asset_commands::reveal_asset,

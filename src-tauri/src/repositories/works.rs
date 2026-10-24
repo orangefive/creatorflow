@@ -5,7 +5,7 @@ use crate::errors::{AppError, AppResult};
 
 const SELECT_COLUMNS: &str = "
     w.id, w.name, w.description, w.status, w.root_path, w.template_key,
-    w.created_at, w.updated_at, w.archived_at,
+    w.created_at, w.updated_at, w.archived_at, w.archived_from_status,
     (SELECT COUNT(*) FROM assets a WHERE a.work_id = w.id AND a.deleted_at IS NULL) AS asset_count
 ";
 
@@ -25,6 +25,7 @@ fn map_work(row: &Row<'_>) -> rusqlite::Result<Work> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         archived_at: row.get("archived_at")?,
+        archived_from_status: row.get("archived_from_status")?,
         asset_count: row.get("asset_count")?,
     })
 }
@@ -34,8 +35,8 @@ pub fn insert(connection: &Connection, work: &Work) -> AppResult<()> {
         .execute(
             "INSERT INTO works (
                 id, name, description, status, root_path, template_key,
-                created_at, updated_at, archived_at, deleted_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
+                created_at, updated_at, archived_at, archived_from_status, deleted_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL)",
             params![
                 work.id,
                 work.name,
@@ -125,4 +126,29 @@ pub fn touch(connection: &Connection, work_id: &str, updated_at: &str) -> AppRes
             params![updated_at, work_id],
         )
         .map_err(|error| AppError::db_context("无法更新作品时间", error))
+}
+
+/// 记录归档前的状态；传 `None` 表示清除（取消归档时）。
+pub fn set_archived_from(
+    connection: &Connection,
+    work_id: &str,
+    status: Option<&str>,
+) -> AppResult<usize> {
+    connection
+        .execute(
+            "UPDATE works SET archived_from_status = ?1 WHERE id = ?2",
+            params![status, work_id],
+        )
+        .map_err(|error| AppError::db_context("无法更新归档来源状态", error))
+}
+
+/// 软删除作品：只写 `deleted_at`，记录保留，便于回溯与恢复。
+pub fn soft_delete(connection: &Connection, work_id: &str, deleted_at: &str) -> AppResult<usize> {
+    connection
+        .execute(
+            "UPDATE works SET deleted_at = ?1, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL",
+            params![deleted_at, work_id],
+        )
+        .map_err(|error| AppError::db_context("无法移除作品记录", error))
 }

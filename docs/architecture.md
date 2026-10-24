@@ -92,6 +92,49 @@ AssetListView → imports.start → invoke start_import
 - 否则置 `failed`，`error_code=interrupted`，提示可重试；
 - 报告通过 `get_startup_recovery_report` 返回，前端用通知展示。
 
+### 3.4 元数据与缩略图（0.2.0）
+
+```text
+导入完成 / 启动补齐 / 手动重试
+  → MetadataService.enqueue(assetId)
+  → 单线程队列依次处理
+      图片：image 读取宽高（只解析文件头），再解码生成 480px JPEG 缩略图
+      音频：lofty 读取时长/采样率/声道/编码，内嵌封面转缩略图
+      视频：mp4 解析时长/宽高/帧率/编码；封面调用本机 ffmpeg（可选）
+  → 事务内更新 assets 的元数据与缩略图状态
+  → emit asset://metadata，前端刷新当前页
+```
+
+- 缩略图存放在应用缓存目录 `<app_cache>/thumbnails/<workId>/<assetId>-<size>-<mtime>.jpg`，文件名带源文件指纹，源文件变化后自动重建。
+- 前端通过受控的 `asset://` 协议读取缩略图，协议范围仅限缓存目录（`tauri.conf.json` 的 `assetProtocol.scope`）。
+- 媒体信息提取失败只写入 `metadata_status = failed` 与原因，素材本身仍是 `ready`。
+- ffmpeg 不随应用分发，仅在用户本机已安装时启用视频封面；未安装时明确显示不可用。
+
+### 3.5 重新定位缺失素材（0.2.0）
+
+```text
+选择新文件 → 校验：存在、是普通文件、位于作品根目录内、未被其他素材占用
+  → 比较大小；若记录有 SHA-256 且大小一致，再比较哈希
+  → 不一致：requiresConfirmation（不写库）
+  → 用户确认或内容一致：事务更新 relative_path/size/hash/status，写活动记录
+  → 内容不一致时重置元数据为 pending，重新提取
+```
+
+### 3.6 归档、恢复与删除（0.2.1）
+
+```text
+归档：works.status = archived，同时记录 archived_from_status
+恢复：按 archived_from_status 还原（缺失或非法时回落到 idea），清空 archived_at
+删除作品：作品根目录 → Shell 回收站 → 事务内软删除 works 与其全部 assets → 清理缩略图缓存
+删除素材：单个文件 → Shell 回收站 → 软删除 assets → 解除标签关联 → 删除缩略图
+```
+
+- **回收站**：Windows 上调用 `SHFileOperationW`（`FO_DELETE | FOF_ALLOWUNDO | FOF_WANTNUKEWARNING`），文件进入系统回收站，可从回收站还原。路径会先去掉 `\\?\` 前缀，因为该 API 不接受扩展长度路径。
+- **顺序**：先动磁盘、再改库。回收站失败（文件被占用、权限不足）时直接返回错误，数据库保持原状，避免「记录没了、文件还在」。
+- **软删除**：只写 `deleted_at`，行数据保留；所有列表、分区计数、标签计数、元数据补齐都以 `deleted_at IS NULL` 过滤。
+- **删除作品**：同时软删除该作品下全部素材，并清理 `<app_cache>/thumbnails/<workId>/`，缓存可按需重建。
+- **文件已缺失时**：仍允许删除记录，不再尝试回收站；路径解析失败（记录异常）时只记日志，绝不触碰作品目录以外的文件。
+
 ## 4. 安全设计
 
 1. **路径穿越防护**：`normalize_relative` 拒绝绝对路径、盘符、`..`、控制字符；`resolve_within` 再对最近的已存在祖先做 canonicalize 并校验前缀，防止符号链接逃逸。
@@ -100,6 +143,7 @@ AssetListView → imports.start → invoke start_import
 4. **无 shell**：打开文件/定位文件使用 opener 插件的结构化 API，不拼接命令行字符串。
 5. **最小权限**：capabilities 仅放行事件与文件选择对话框。
 6. **数据库损坏防护**：外键开启、WAL、busy_timeout=5s；迁移逐版本事务执行。
+7. **删除可回退**：删除只走系统回收站 + 数据库软删除，应用内没有任何不可恢复的抹除路径；回收站失败即中止，不会只删一半。
 
 ## 5. 错误模型
 
@@ -107,16 +151,20 @@ AssetListView → imports.start → invoke start_import
 
 前端 `IpcError` 统一归一化，界面只展示 `message`；`detail` 用于问题排查。
 
-## 6. 线程与并发
+## 6. 线程与并发（0.2.0）
 
 - 命令层统一走 `tauri::async_runtime::spawn_blocking`，避免阻塞主线程。
 - SQLite 连接放在 `Mutex` 中，所有操作都是短事务；文件复制期间不持锁。
-- 导入任务每文件一个后台线程；第一阶段的并发上限留给第二阶段（批量导入与受限并发）。
-- 进度写库做了时间节流，避免频繁锁争用。
+- **导入队列**：`ImportManager` 维护一个 `mpsc` 队列与固定数量的工作线程（默认 2，配置范围 1—4），任务排队执行，不再按文件创建线程；活动线程数与峰值可观测（`peak_concurrency` 用于测试）。
+- **元数据队列**：单线程顺序处理，避免图片解码或 ffmpeg 并发抢占 CPU。
+- 进度写库与事件都做了节流，避免频繁锁争用与前端重绘。
 
-## 7. 已知技术债
+## 7. 已知技术债（0.2.0）
 
-- 导入线程数未设上限，大量文件同时导入会争用磁盘（第二阶段引入队列与并发上限）。
 - 重命名时 manifest 重写失败只记录警告，不回滚（manifest 为辅助识别文件）。
-- 素材列表的存在性校准逐条 `stat`，超大分区可考虑批量或缓存（第二阶段）。
-- 未实现数据库备份 UI（第二阶段）。
+- 素材列表的存在性校准对当前页逐条 `stat`，超大分区可改为批量或缓存。
+- 搜索使用 `LIKE '%关键词%'`，数据量大时无法命中索引，可考虑 FTS5。
+- 缩略图缓存没有容量上限与清理策略。
+- 音频波形、跨作品搜索入口、批量删除尚未实现。
+- 回收站操作依赖系统对话框行为：文件体积超过回收站容量时会由系统提示「将永久删除」，该提示在后台线程中弹出。
+- 未实现数据库备份 UI。

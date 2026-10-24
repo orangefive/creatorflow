@@ -21,6 +21,14 @@ export type MediaKind = 'document' | 'audio' | 'video' | 'image' | 'other'
 
 export type AssetStatus = 'importing' | 'ready' | 'missing' | 'failed' | 'trashed'
 
+export type MetadataStatus = 'pending' | 'ready' | 'partial' | 'failed' | 'unsupported'
+
+export type ThumbnailStatus = 'pending' | 'ready' | 'failed' | 'unsupported'
+
+export type AssetSortKey = 'name' | 'created_at' | 'size' | 'duration'
+
+export type SortDirection = 'asc' | 'desc'
+
 export type ImportStatus =
   | 'queued'
   | 'copying'
@@ -39,6 +47,7 @@ export interface Work {
   createdAt: string
   updatedAt: string
   archivedAt: string | null
+  archivedFromStatus: WorkStatus | null
   assetCount: number
 }
 
@@ -50,6 +59,12 @@ export interface Section {
   relativePath: string
   sortOrder: number
   createdAt: string
+  assetCount: number
+}
+
+export interface Tag {
+  id: string
+  name: string
   assetCount: number
 }
 
@@ -70,6 +85,56 @@ export interface Asset {
   updatedAt: string
   /** 绝对路径仅用于展示与“在资源管理器中显示”，由后端解析 */
   absolutePath: string
+  width: number | null
+  height: number | null
+  durationMs: number | null
+  frameRate: number | null
+  sampleRate: number | null
+  channels: number | null
+  codec: string | null
+  sha256: string | null
+  metadataStatus: MetadataStatus
+  metadataError: string | null
+  thumbnailStatus: ThumbnailStatus
+  thumbnailRelativePath: string | null
+  /** 缩略图在磁盘上的绝对路径，配合 convertFileSrc 使用 */
+  thumbnailPath: string | null
+  thumbnailError: string | null
+  tags: Tag[]
+}
+
+export interface AssetQuery {
+  workId?: string | null
+  sectionKey?: SectionKey | null
+  mediaKind?: MediaKind | null
+  status?: AssetStatus | null
+  tagId?: string | null
+  keyword?: string
+  sortKey?: AssetSortKey
+  sortDirection?: SortDirection
+  limit?: number
+  offset?: number
+}
+
+export interface AssetPage {
+  items: Asset[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface RelocationResult {
+  applied: boolean
+  requiresConfirmation: boolean
+  sizeMatches: boolean
+  hashMatches: boolean | null
+  relativePath: string
+  message: string
+  asset: Asset | null
+}
+
+export interface MediaCapabilities {
+  ffmpegAvailable: boolean
 }
 
 export interface ImportJob {

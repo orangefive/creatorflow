@@ -1,25 +1,62 @@
 <template>
   <div class="asset-page">
     <div class="asset-toolbar">
-      <div class="asset-toolbar__left">
+      <div class="filters">
         <el-input
           v-model="assets.query"
           :prefix-icon="Search"
-          placeholder="搜索当前作品素材名称"
+          placeholder="搜索素材名称"
           clearable
           class="search"
+          @input="onSearchInput"
+          @clear="reloadFromStart"
         />
-        <el-select v-model="assets.sortKey" class="sort" size="default">
-          <el-option label="按导入时间" value="createdAt" />
+        <el-select
+          v-model="assets.mediaKind"
+          placeholder="全部类型"
+          clearable
+          class="filter"
+          @change="reloadFromStart"
+        >
+          <el-option
+            v-for="option in MEDIA_KIND_OPTIONS"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+        <el-select
+          v-model="assets.status"
+          placeholder="全部状态"
+          clearable
+          class="filter"
+          @change="reloadFromStart"
+        >
+          <el-option label="正常" value="ready" />
+          <el-option label="文件缺失" value="missing" />
+          <el-option label="导入失败" value="failed" />
+        </el-select>
+        <el-select
+          v-model="assets.tagId"
+          placeholder="全部标签"
+          clearable
+          class="filter"
+          @change="reloadFromStart"
+        >
+          <el-option v-for="tag in tags" :key="tag.id" :label="tag.name" :value="tag.id" />
+        </el-select>
+        <el-select v-model="assets.sortKey" class="filter" @change="reloadFromStart">
+          <el-option label="按导入时间" value="created_at" />
           <el-option label="按名称" value="name" />
           <el-option label="按大小" value="size" />
+          <el-option label="按时长" value="duration" />
         </el-select>
-        <el-select v-model="assets.sortDirection" class="sort" size="default">
-          <el-option label="降序" value="desc" />
-          <el-option label="升序" value="asc" />
-        </el-select>
+        <el-tooltip :content="assets.sortDirection === 'desc' ? '当前降序' : '当前升序'">
+          <el-button :icon="ArrowDownUp" @click="toggleDirection" />
+        </el-tooltip>
+        <el-button v-if="assets.hasFilters" text @click="clearFilters">清除筛选</el-button>
       </div>
-      <div class="asset-toolbar__right">
+      <div class="actions">
         <el-button :icon="RefreshCw" :loading="assets.loading" @click="load">刷新</el-button>
         <el-button type="primary" :icon="Upload" @click="pickFiles">导入文件</el-button>
       </div>
@@ -40,55 +77,117 @@
       type="warning"
       :closable="false"
       show-icon
-      :title="`有 ${assets.missingCount} 个素材在磁盘上找不到，记录已保留，请检查文件是否被移动或删除。`"
+      :title="`当前作品有 ${assets.missingCount} 个素材在磁盘上找不到，可用「重新定位」重新关联。`"
+    />
+
+    <el-alert
+      v-if="sectionKey === 'video' && !assets.ffmpegAvailable"
+      class="notice"
+      type="info"
+      :closable="false"
+      show-icon
+      title="未检测到 ffmpeg：仍可导入视频并读取 MP4/MOV 时长与分辨率，但不会生成视频封面。"
     />
 
     <div class="asset-list cf-card">
       <el-table
         v-loading="assets.loading"
-        :data="assets.filteredAssets"
+        :data="assets.items"
         row-key="id"
         height="100%"
         :empty-text="emptyText"
         @row-dblclick="onRowDoubleClick"
       >
-        <el-table-column label="名称" min-width="260">
+        <el-table-column label="" width="68">
+          <template #default="{ row }">
+            <div class="thumb">
+              <img
+                v-if="thumbnailSrc(row)"
+                :src="thumbnailSrc(row) as string"
+                :alt="row.displayName"
+                loading="lazy"
+                @error="markThumbnailBroken(row.id)"
+              />
+              <component v-else :is="iconFor(row.mediaKind)" :size="18" :stroke-width="1.6" />
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="名称" min-width="160">
           <template #default="{ row }">
             <div class="name-cell">
-              <component :is="iconFor(row.mediaKind)" :size="16" :stroke-width="1.7" class="name-icon" />
               <span class="name-text" :title="row.relativePath">{{ row.displayName }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="90">
+
+        <el-table-column label="类型" width="70">
           <template #default="{ row }">
             {{ MEDIA_KIND_LABEL[row.mediaKind as MediaKind] }}
           </template>
         </el-table-column>
-        <el-table-column label="大小" width="110" align="right">
+
+        <el-table-column label="媒体信息" width="185">
+          <template #default="{ row }">
+            <el-tooltip
+              :disabled="!row.metadataError"
+              :content="row.metadataError ?? ''"
+              placement="top"
+            >
+              <span class="meta-text">{{ metadataText(row) }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="标签" width="140">
+          <template #default="{ row }">
+            <el-select
+              :model-value="row.tags.map((tag: Tag) => tag.name)"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              size="small"
+              placeholder="+ 标签"
+              class="tag-select"
+              @change="onTagsChange(row, $event)"
+            >
+              <el-option
+                v-for="tag in tagOptions(row)"
+                :key="tag.id"
+                :label="tag.name"
+                :value="tag.name"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="大小" width="88" align="right">
           <template #default="{ row }">{{ formatBytes(row.sizeBytes) }}</template>
         </el-table-column>
-        <el-table-column label="导入时间" width="150">
+
+        <el-table-column label="导入时间" width="140">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+
+        <el-table-column label="状态" width="84">
           <template #default="{ row }">
             <el-tag
               size="small"
-              :type="row.status === 'ready' ? 'success' : row.status === 'missing' ? 'danger' : 'warning'"
+              :type="ASSET_STATUS_META[row.status as AssetStatus].type"
               effect="plain"
             >
-              {{ statusLabel(row.status) }}
+              {{ ASSET_STATUS_META[row.status as AssetStatus].label }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+
+        <el-table-column label="操作" width="268" fixed="right">
           <template #default="{ row }">
             <el-button
-              v-if="row.mediaKind === 'image'"
+              v-if="row.mediaKind === 'image' && row.status === 'ready'"
               size="small"
               text
-              :disabled="row.status !== 'ready'"
               @click="preview(row)"
             >
               预览
@@ -102,16 +201,56 @@
             >
               打开
             </el-button>
-            <el-button size="small" text :disabled="row.status !== 'ready'" @click="revealAsset(row)">
+            <el-button
+              size="small"
+              text
+              :disabled="row.status !== 'ready'"
+              @click="revealAsset(row)"
+            >
               定位
             </el-button>
+            <el-button
+              v-if="row.status === 'missing'"
+              size="small"
+              text
+              type="warning"
+              @click="relocate(row)"
+            >
+              重新定位
+            </el-button>
+            <el-button
+              v-if="row.metadataStatus === 'failed'"
+              size="small"
+              text
+              @click="retryMetadata(row)"
+            >
+              重试信息
+            </el-button>
+            <el-button size="small" text type="danger" @click="removeAsset(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
+    <div class="footer">
+      <span class="cf-muted">
+        共 {{ assets.total }} 个素材
+        <template v-if="assets.hasFilters">（已筛选）</template>
+      </span>
+      <el-pagination
+        :current-page="assets.page"
+        :page-size="assets.pageSize"
+        :page-sizes="[20, 50, 100, 200]"
+        :total="assets.total"
+        layout="sizes, prev, pager, next"
+        background
+        @current-change="onPageChange"
+        @size-change="onPageSizeChange"
+      />
+    </div>
+
     <p class="drop-tip">
-      也可以把文件直接拖入窗口导入到「{{ sectionName }}」分区，源文件不会被移动。
+      也可以把文件直接拖入窗口导入到当前分区，源文件不会被移动。
     </p>
 
     <div v-if="dragging" class="drop-overlay">
@@ -135,12 +274,7 @@
       <el-skeleton v-else :rows="4" animated />
       <template #footer>
         <el-button @click="previewVisible = false">关闭</el-button>
-        <el-button
-          v-if="previewAsset"
-          type="primary"
-          plain
-          @click="openAsset(previewAsset)"
-        >
+        <el-button v-if="previewAsset" type="primary" plain @click="openAsset(previewAsset)">
           使用默认程序打开
         </el-button>
       </template>
@@ -150,38 +284,67 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { UnlistenFn } from '@tauri-apps/api/event'
-import { AudioLines, FileText, Image as ImageIcon, RefreshCw, Search, Upload, Video } from '@lucide/vue'
+import {
+  ArrowDownUp,
+  AudioLines,
+  FileText,
+  Image as ImageIcon,
+  RefreshCw,
+  Search,
+  Upload,
+  Video,
+} from '@lucide/vue'
 import ImportPrepareDialog from '@/components/ImportPrepareDialog.vue'
-import { MEDIA_KIND_LABEL, SECTION_META } from '@/constants/sections'
-import { isTauriRuntime } from '@/services/ipc'
+import {
+  ASSET_STATUS_META,
+  MEDIA_KIND_LABEL,
+  MEDIA_KIND_OPTIONS,
+  SECTION_META,
+} from '@/constants/sections'
+import { isTauriRuntime, toIpcError } from '@/services/ipc'
+import { onAssetMetadata } from '@/services/events'
 import { useAssetsStore } from '@/stores/assets'
 import { useImportsStore } from '@/stores/imports'
-import type { Asset, ImportCandidate, MediaKind, SectionKey } from '@/types'
-import { formatBytes, formatDateTime } from '@/utils/format'
+import type { Asset, AssetStatus, ImportCandidate, MediaKind, SectionKey, Tag } from '@/types'
+import {
+  formatBytes,
+  formatDateTime,
+  formatDimensions,
+  formatDuration,
+  formatFrameRate,
+} from '@/utils/format'
+
+const emit = defineEmits<{ changed: [] }>()
 
 const props = defineProps<{ workId: string; sectionKey: SectionKey }>()
 
 const assets = useAssetsStore()
 const imports = useImportsStore()
 
+const tags = ref<Tag[]>([])
 const prepareVisible = ref(false)
 const candidates = ref<ImportCandidate[]>([])
 const dragging = ref(false)
 const previewVisible = ref(false)
 const previewUrl = ref<string | null>(null)
 const previewAsset = ref<Asset | null>(null)
+const brokenThumbnails = ref<Set<string>>(new Set())
 
 let unlistenDragDrop: UnlistenFn | null = null
+let unlistenMetadata: UnlistenFn | null = null
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+let metadataTimer: ReturnType<typeof setTimeout> | null = null
 
 const sectionName = computed(() => SECTION_META[props.sectionKey].name)
 const previewTitle = computed(() => previewAsset.value?.displayName ?? '图片预览')
-const emptyText = computed(() =>
-  assets.query.trim() ? '没有匹配的素材' : `「${sectionName.value}」分区还没有素材`,
-)
+const emptyText = computed(() => {
+  if (assets.hasFilters) return '没有符合条件的素材'
+  return `「${sectionName.value}」分区还没有素材`
+})
 
 function iconFor(kind: MediaKind) {
   switch (kind) {
@@ -196,25 +359,117 @@ function iconFor(kind: MediaKind) {
   }
 }
 
-function statusLabel(status: Asset['status']): string {
-  switch (status) {
-    case 'ready':
-      return '正常'
-    case 'missing':
-      return '文件缺失'
-    case 'importing':
-      return '导入中'
-    case 'failed':
-      return '导入失败'
-    case 'trashed':
-      return '已移除'
+function thumbnailSrc(asset: Asset): string | null {
+  if (brokenThumbnails.value.has(asset.id)) return null
+  return assets.thumbnailFor(asset)
+}
+
+function markThumbnailBroken(assetId: string): void {
+  const next = new Set(brokenThumbnails.value)
+  next.add(assetId)
+  brokenThumbnails.value = next
+}
+
+function metadataText(asset: Asset): string {
+  switch (asset.mediaKind) {
+    case 'image':
+      return formatDimensions(asset.width, asset.height)
+    case 'audio': {
+      const parts = [formatDuration(asset.durationMs)]
+      if (asset.sampleRate) parts.push(`${(asset.sampleRate / 1000).toFixed(1)} kHz`)
+      return parts.join(' · ')
+    }
+    case 'video': {
+      const parts = [
+        formatDuration(asset.durationMs),
+        formatDimensions(asset.width, asset.height),
+      ]
+      const fps = formatFrameRate(asset.frameRate)
+      if (fps) parts.push(fps)
+      return parts.join(' · ')
+    }
     default:
-      return status
+      return '—'
   }
+}
+
+function tagOptions(asset: Asset): Tag[] {
+  const merged = new Map<string, Tag>()
+  for (const tag of tags.value) merged.set(tag.name, tag)
+  for (const tag of asset.tags) merged.set(tag.name, tag)
+  return Array.from(merged.values())
 }
 
 async function load(): Promise<void> {
   await assets.fetchAssets(props.workId, props.sectionKey)
+}
+
+async function removeAsset(asset: Asset): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `删除「${asset.displayName}」？\n\n文件会被移到系统回收站，列表中的记录同时移除，之后可从回收站还原。`,
+      '删除素材',
+      {
+        confirmButtonText: '移到回收站',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  const message = await assets.deleteAsset(asset.id)
+  if (message) {
+    ElMessage.error(message)
+    return
+  }
+  ElMessage.success('素材已移到回收站')
+
+  // 当前页删空且不是第一页时回退一页，避免停在空白页
+  if (assets.items.length === 0 && assets.page > 1) {
+    assets.setPage(assets.page - 1)
+    await load()
+  }
+  emit('changed')
+}
+
+async function loadTags(): Promise<void> {
+  tags.value = await assets.loadWorkTags(props.workId)
+}
+
+function reloadFromStart(): void {
+  assets.applyFilters()
+  void load()
+}
+
+function clearFilters(): void {
+  assets.resetFilters()
+  void load()
+}
+
+function onSearchInput(): void {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    void reloadFromStart()
+  }, 300)
+}
+
+function toggleDirection(): void {
+  assets.sortDirection = assets.sortDirection === 'desc' ? 'asc' : 'desc'
+  void reloadFromStart()
+}
+
+function onPageChange(page: number): void {
+  assets.setPage(page)
+  void load()
+}
+
+function onPageSizeChange(size: number): void {
+  assets.pageSize = size
+  assets.page = 1
+  void load()
 }
 
 async function pickFiles(): Promise<void> {
@@ -228,8 +483,7 @@ async function pickFiles(): Promise<void> {
     directory: false,
   })
   if (!selected) return
-  const paths = Array.isArray(selected) ? selected : [selected]
-  await handlePaths(paths)
+  await handlePaths(Array.isArray(selected) ? selected : [selected])
 }
 
 async function handlePaths(paths: string[]): Promise<void> {
@@ -285,14 +539,61 @@ async function revealAsset(asset: Asset): Promise<void> {
   if (error) ElMessage.error(error)
 }
 
+async function retryMetadata(asset: Asset): Promise<void> {
+  const error = await assets.retryMetadata(asset.id)
+  if (error) ElMessage.error(error)
+  else ElMessage.success('已重新提取媒体信息')
+}
+
 function onRowDoubleClick(row: Asset): void {
   if (row.status === 'ready') void openAsset(row)
+}
+
+async function onTagsChange(asset: Asset, value: unknown): Promise<void> {
+  const names = Array.isArray(value) ? value.map((item) => String(item).trim()) : []
+  const error = await assets.updateAssetTags(asset, names.filter(Boolean))
+  if (error) ElMessage.error(error)
+  else await loadTags()
+}
+
+async function relocate(asset: Asset): Promise<void> {
+  if (!isTauriRuntime()) {
+    ElMessage.warning('重新定位需要在桌面端运行')
+    return
+  }
+  const selected = await open({
+    multiple: false,
+    title: `为「${asset.displayName}」选择文件的新位置`,
+    directory: false,
+  })
+  if (!selected || Array.isArray(selected)) return
+
+  try {
+    let result = await assets.relocate(asset.id, selected, false)
+    if (result.requiresConfirmation) {
+      await ElMessageBox.confirm(result.message, '文件内容不一致', {
+        confirmButtonText: '仍然关联',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+      result = await assets.relocate(asset.id, selected, true)
+    }
+    if (result.applied) {
+      ElMessage.success(result.message)
+      await load()
+      await loadTags()
+    }
+  } catch (cause) {
+    if (cause === 'cancel' || cause === 'close') return
+    ElMessage.error(toIpcError(cause).message)
+  }
 }
 
 watch(
   () => [props.workId, props.sectionKey],
   () => {
     assets.reset()
+    void loadTags()
     void load()
   },
 )
@@ -301,25 +602,33 @@ watch(
   () => imports.completedSignal,
   () => {
     void load()
+    void loadTags()
   },
 )
 
 onMounted(async () => {
   if (!isTauriRuntime()) return
-  await load()
-  if (isTauriRuntime()) {
-    unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === 'over' || event.payload.type === 'enter') {
-        dragging.value = true
-      } else if (event.payload.type === 'drop') {
-        dragging.value = false
-        const paths = event.payload.paths.filter((path) => !path.endsWith('\\'))
-        void handlePaths(paths)
-      } else {
-        dragging.value = false
-      }
-    })
-  }
+  assets.page = 1
+  await Promise.all([load(), loadTags(), assets.loadCapabilities()])
+
+  unlistenMetadata = await onAssetMetadata((event) => {
+    if (event.workId !== props.workId) return
+    if (metadataTimer) clearTimeout(metadataTimer)
+    metadataTimer = setTimeout(() => {
+      void load()
+    }, 500)
+  })
+
+  unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === 'over' || event.payload.type === 'enter') {
+      dragging.value = true
+    } else if (event.payload.type === 'drop') {
+      dragging.value = false
+      void handlePaths(event.payload.paths.filter((path) => !path.endsWith('\\')))
+    } else {
+      dragging.value = false
+    }
+  })
 })
 
 onUnmounted(() => {
@@ -327,6 +636,12 @@ onUnmounted(() => {
     unlistenDragDrop()
     unlistenDragDrop = null
   }
+  if (unlistenMetadata) {
+    unlistenMetadata()
+    unlistenMetadata = null
+  }
+  if (searchTimer) clearTimeout(searchTimer)
+  if (metadataTimer) clearTimeout(metadataTimer)
 })
 </script>
 
@@ -336,7 +651,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 4px 28px 20px;
+  padding: 4px 28px 16px;
   min-height: 0;
 }
 
@@ -349,33 +664,53 @@ onUnmounted(() => {
   margin-bottom: 12px;
 }
 
-.asset-toolbar__left {
+.filters {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.asset-toolbar__right {
+.actions {
   display: flex;
   gap: 8px;
 }
 
 .search {
-  width: 240px;
+  width: 220px;
 }
 
-.sort {
-  width: 120px;
+.filter {
+  width: 124px;
 }
 
 .notice {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .asset-list {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.thumb {
+  width: 44px;
+  height: 32px;
+  border-radius: 4px;
+  background: #f1f3f7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9aa3b2;
+  overflow: hidden;
+}
+
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .name-cell {
@@ -385,19 +720,35 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.name-icon {
-  color: #6b7280;
-  flex: 0 0 auto;
-}
-
 .name-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.meta-text {
+  color: var(--cf-text-muted);
+  font-size: 12px;
+}
+
+.tag-select {
+  width: 100%;
+}
+
+.tag-select :deep(.el-select__wrapper) {
+  min-height: 26px;
+  padding: 2px 8px;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+}
+
 .drop-tip {
-  margin: 10px 2px 0;
+  margin: 8px 2px 0;
   font-size: 12px;
   color: #9ca3af;
 }

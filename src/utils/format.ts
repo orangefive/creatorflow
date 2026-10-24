@@ -44,3 +44,33 @@ export function extensionOf(fileName: string): string | null {
   if (dotIndex <= 0 || dotIndex === fileName.length - 1) return null
   return fileName.slice(dotIndex + 1).toLowerCase()
 }
+
+/** 毫秒转 `m:ss` 或 `h:mm:ss`；空值返回 — */
+export function formatDuration(durationMs: number | null | undefined): string {
+  if (durationMs === null || durationMs === undefined) return '—'
+  if (!Number.isFinite(durationMs) || durationMs < 0) return '—'
+  const totalSeconds = Math.round(durationMs / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const pad = (value: number): string => value.toString().padStart(2, '0')
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
+}
+
+export function formatDimensions(
+  width: number | null | undefined,
+  height: number | null | undefined,
+): string {
+  if (!width || !height || width <= 0 || height <= 0) return '—'
+  return `${width} × ${height}`
+}
+
+export function formatSampleRate(sampleRate: number | null | undefined): string {
+  if (!sampleRate || sampleRate <= 0) return '—'
+  return `${(sampleRate / 1000).toFixed(1)} kHz`
+}
+
+export function formatFrameRate(frameRate: number | null | undefined): string | null {
+  if (!frameRate || frameRate <= 0) return null
+  return `${frameRate.toFixed(2).replace(/\.?0+$/, '')} fps`
+}

@@ -3,4 +3,5 @@ pub mod assets;
 pub mod import_jobs;
 pub mod sections;
 pub mod settings;
+pub mod tags;
 pub mod works;

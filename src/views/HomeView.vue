@@ -56,23 +56,28 @@
       </div>
 
       <div v-else class="work-grid">
-        <button
-          v-for="work in works.recentWorks"
-          :key="work.id"
-          type="button"
-          class="work-card"
-          @click="openWork(work.id)"
-        >
-          <div class="work-card__top">
-            <span class="work-card__name">{{ work.name }}</span>
-            <WorkStatusTag :status="work.status" />
-          </div>
-          <p class="work-card__desc">{{ work.description || '暂无描述' }}</p>
-          <div class="work-card__meta">
-            <span>{{ work.assetCount }} 个素材</span>
-            <span>{{ formatDateTime(work.updatedAt) }}</span>
-          </div>
-        </button>
+        <div v-for="work in works.recentWorks" :key="work.id" class="work-card-wrap">
+          <button type="button" class="work-card" @click="openWork(work.id)">
+            <div class="work-card__top">
+              <span class="work-card__name">{{ work.name }}</span>
+              <WorkStatusTag :status="work.status" />
+            </div>
+            <p class="work-card__desc">{{ work.description || '暂无描述' }}</p>
+            <div class="work-card__meta">
+              <span>{{ work.assetCount }} 个素材</span>
+              <span class="work-card__time">{{ formatDateTime(work.updatedAt) }}</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="work-card__delete"
+            title="删除作品（移到回收站）"
+            aria-label="删除作品"
+            @click.stop="remove(work)"
+          >
+            <component :is="Trash2" :size="15" :stroke-width="1.8" />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -107,18 +112,20 @@
         <el-table-column label="更新时间" width="150">
           <template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="272" fixed="right">
           <template #default="{ row }">
             <el-button size="small" text type="primary" @click="openWork(row.id)">打开</el-button>
             <el-button size="small" text @click="rename(row)">重命名</el-button>
             <el-button
+              v-if="row.status === 'archived'"
               size="small"
               text
-              :disabled="row.status === 'archived'"
-              @click="archive(row)"
+              @click="unarchive(row)"
             >
-              归档
+              恢复
             </el-button>
+            <el-button v-else size="small" text @click="archive(row)">归档</el-button>
+            <el-button size="small" text type="danger" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -132,7 +139,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { FolderOpen, Plus, RefreshCw } from '@lucide/vue'
+import { FolderOpen, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import CreateWorkDialog from '@/components/CreateWorkDialog.vue'
 import WorkStatusTag from '@/components/WorkStatusTag.vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -212,6 +219,37 @@ async function archive(work: Work): Promise<void> {
   else ElMessage.error(works.error ?? '归档失败')
 }
 
+async function unarchive(work: Work): Promise<void> {
+  const ok = await works.unarchiveWork(work.id)
+  if (ok) {
+    const status = work.archivedFromStatus
+    ElMessage.success(status ? '已取消归档，状态已恢复' : '已取消归档')
+  } else {
+    ElMessage.error(works.error ?? '取消归档失败')
+  }
+}
+
+async function remove(work: Work): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `删除作品「${work.name}」？\n\n整个作品文件夹（${work.assetCount} 个素材）会被移到系统回收站，` +
+        '应用内的记录也会移除。文件仍可从回收站还原。',
+      '删除作品',
+      {
+        confirmButtonText: '移到回收站',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+  const ok = await works.deleteWork(work.id)
+  if (ok) ElMessage.success('作品已移入回收站')
+  else ElMessage.error(works.error ?? '删除失败')
+}
+
 watch(showAll, () => {
   void reload()
 })
@@ -263,7 +301,13 @@ onMounted(async () => {
   gap: 14px;
 }
 
+.work-card-wrap {
+  position: relative;
+  display: flex;
+}
+
 .work-card {
+  flex: 1;
   text-align: left;
   padding: 16px;
   border: 1px solid var(--cf-border);
@@ -312,6 +356,49 @@ onMounted(async () => {
   justify-content: space-between;
   font-size: 12px;
   color: #9ca3af;
+}
+
+.work-card__time {
+  transition: opacity 0.12s ease;
+}
+
+/* 删除按钮与日期占同一位置：悬停时日期淡出、按钮淡入，避免布局抖动 */
+.work-card__delete {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
+}
+
+.work-card-wrap:hover .work-card__delete,
+.work-card__delete:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.work-card-wrap:hover .work-card__time {
+  opacity: 0;
+}
+
+.work-card__delete:hover {
+  color: #e5484d;
+  background: rgb(229 72 77 / 10%);
 }
 
 .empty-title {

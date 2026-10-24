@@ -1,10 +1,10 @@
 [package]
 name = "creatorflow"
-version = "0.1.0"
+version = "0.2.1"
 description = "CreatorFlow 桌面端"
 authors = ["orangefive"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/orangefive/creatorflow"
 
@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -29,13 +29,22 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+image = { version = "0.25.6", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+sha2 = "0.10.9"
+lofty = "0.22.2"
+mp4 = "0.14.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell"] }
 
 [dev-dependencies]
 tempfile = "3"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
-codegen-units = 1
-lto = true
+codegen-units = 4
+lto = "thin"
 opt-level = "s"
 panic = "abort"
-strip = true
+strip = "symbols"

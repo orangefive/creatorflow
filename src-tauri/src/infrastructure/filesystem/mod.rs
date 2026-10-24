@@ -3,11 +3,21 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf, MAIN_SEPARATOR_STR};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use sha2::{Digest, Sha256};
+
 use crate::errors::{AppError, AppResult};
 
 /// 固定缓冲区流式复制，避免把大文件整体读入内存。
 pub const COPY_BUFFER_SIZE: usize = 1024 * 1024;
 const MAX_UNIQUE_ATTEMPTS: u32 = 9999;
+/// 超过该体积的文件不计算内容哈希，避免导入超长视频时明显拖慢。
+pub const MAX_HASH_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct CopyOutcome {
+    pub bytes_copied: u64,
+    pub sha256: Option<String>,
+}
 
 pub fn ensure_dir(path: &Path) -> AppResult<()> {
     fs::create_dir_all(path)
@@ -144,7 +154,7 @@ pub fn copy_streaming<F>(
     target: &Path,
     cancel: &AtomicBool,
     mut on_progress: F,
-) -> AppResult<u64>
+) -> AppResult<CopyOutcome>
 where
     F: FnMut(u64),
 {
@@ -173,6 +183,7 @@ where
     let mut writer = BufWriter::with_capacity(COPY_BUFFER_SIZE, target_file);
     let mut buffer = vec![0_u8; COPY_BUFFER_SIZE];
     let mut copied: u64 = 0;
+    let mut hasher = (expected_size <= MAX_HASH_BYTES).then(Sha256::new);
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -187,6 +198,9 @@ where
         writer
             .write_all(&buffer[..read])
             .map_err(|error| AppError::io_context("写入目标文件失败，可能是磁盘空间不足", error))?;
+        if let Some(hasher) = hasher.as_mut() {
+            hasher.update(&buffer[..read]);
+        }
         copied += read as u64;
         on_progress(copied);
     }
@@ -204,7 +218,31 @@ where
             "文件大小校验失败：源文件 {expected_size} 字节，目标文件 {written} 字节"
         )));
     }
-    Ok(copied)
+    let sha256 = hasher.map(|hasher| format!("{:x}", hasher.finalize()));
+    Ok(CopyOutcome {
+        bytes_copied: copied,
+        sha256,
+    })
+}
+
+/// 计算文件的 SHA-256（流式读取，不加载整份文件）。
+pub fn sha256_file(path: &Path) -> AppResult<String> {
+    let mut reader = BufReader::with_capacity(
+        COPY_BUFFER_SIZE,
+        File::open(path).map_err(|error| AppError::io_context("无法读取文件", error))?,
+    );
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; COPY_BUFFER_SIZE];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| AppError::io_context("读取文件失败", error))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub fn remove_file_if_exists(path: &Path) -> AppResult<bool> {
@@ -327,11 +365,12 @@ mod tests {
         let target = temp.path().join("target.bin");
         let cancel = AtomicBool::new(false);
         let mut last_progress = 0_u64;
-        let copied =
+        let outcome =
             copy_streaming(&source, &target, &cancel, |value| last_progress = value).unwrap();
 
-        assert_eq!(copied, payload.len() as u64);
+        assert_eq!(outcome.bytes_copied, payload.len() as u64);
         assert_eq!(last_progress, payload.len() as u64);
+        assert!(outcome.sha256.is_some(), "小于哈希上限的文件应计算 SHA-256");
         assert!(source.exists(), "源文件必须保留");
         assert_eq!(fs::read(&source).unwrap(), payload);
         assert_eq!(fs::read(&target).unwrap(), payload);
@@ -349,6 +388,17 @@ mod tests {
         let error = copy_streaming(&source, &target, &cancel, |_| {}).unwrap_err();
         assert_eq!(error.code, crate::errors::ErrorCode::Conflict);
         assert_eq!(fs::read(&target).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn sha256_file_matches_known_digest() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("hello.txt");
+        fs::write(&path, b"hello").unwrap();
+        assert_eq!(
+            sha256_file(&path).unwrap(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
     }
 
     #[test]
