@@ -70,6 +70,11 @@ impl WorkStatus {
         }
     }
 
+    /// 是否可以继续新增任务：归档、创建中与创建失败的工品不再接受新任务。
+    pub fn accepts_new_tasks(self) -> bool {
+        !matches!(self, Self::Creating | Self::Error | Self::Archived)
+    }
+
     /// 用户可在界面上直接切换的状态；`creating`/`error`/`archived` 由系统流程控制。
     pub fn is_user_selectable(self) -> bool {
         matches!(

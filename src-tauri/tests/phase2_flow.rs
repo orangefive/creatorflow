@@ -53,7 +53,7 @@ impl TestEnv {
                 name: name.to_string(),
                 description: None,
                 root_directory: None,
-                template_key: Some("video-basic".to_string()),
+                template_key: None,
             },
         )
         .expect("创建作品失败")
@@ -185,7 +185,7 @@ fn migrates_phase_one_database_without_data_loss() {
                 .map_err(creatorflow_lib::errors::AppError::from)
         })
         .unwrap();
-    assert_eq!(applied, vec![1, 2, 3, 4]);
+    assert_eq!(applied, vec![1, 2, 3, 4, 5]);
 
     let tag_count: i64 = database
         .with_conn(|connection| {

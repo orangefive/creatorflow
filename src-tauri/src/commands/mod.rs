@@ -3,6 +3,8 @@ pub mod backup_commands;
 pub mod cache_commands;
 pub mod import_commands;
 pub mod settings_commands;
+pub mod task_commands;
+pub mod template_commands;
 pub mod work_commands;
 
 use crate::errors::{AppError, AppResult};

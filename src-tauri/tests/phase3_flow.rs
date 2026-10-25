@@ -54,7 +54,7 @@ impl TestEnv {
                 name: name.to_string(),
                 description: None,
                 root_directory: None,
-                template_key: Some("video-basic".to_string()),
+                template_key: None,
             },
         )
         .expect("创建作品失败")

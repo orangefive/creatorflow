@@ -5,5 +5,7 @@ pub mod import;
 pub mod query;
 pub mod relocation;
 pub mod section;
+pub mod task;
+pub mod template;
 pub mod time;
 pub mod work;

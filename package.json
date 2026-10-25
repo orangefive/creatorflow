@@ -1,7 +1,7 @@
 {
   "name": "creatorflow",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "CreatorFlow - 以作品为中心的本地优先创作工作空间",
   "scripts": {

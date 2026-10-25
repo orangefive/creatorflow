@@ -153,6 +153,84 @@
     </section>
 
     <section class="block cf-card">
+      <h2 class="block__title">作品模板</h2>
+      <p class="block__desc">
+        模板只作用于新建作品：套用时会把初始任务复制成作品自己的任务。修改或删除模板不会影响已创建的作品。
+      </p>
+      <div class="template-toolbar">
+        <span class="cf-muted">
+          共 {{ templates.items.length }} 个模板（内置 {{ templates.builtin.length }} 个）
+        </span>
+        <span class="cf-spacer" />
+        <el-button :loading="templates.loading" @click="templates.load()">刷新</el-button>
+        <el-button type="primary" @click="openTemplateCreate">新建模板</el-button>
+      </div>
+
+      <el-alert
+        v-if="templates.error"
+        class="inline-error"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="templates.error"
+      />
+
+      <el-table v-loading="templates.loading" :data="templates.items" size="small" empty-text="暂无模板">
+        <el-table-column label="模板" min-width="200">
+          <template #default="{ row }">
+            <div class="template-name">
+              {{ row.name }}
+              <el-tag v-if="row.isBuiltin" size="small" type="info">内置</el-tag>
+              <el-tag
+                v-if="templates.defaultId === row.id"
+                size="small"
+                type="success"
+                effect="plain"
+              >
+                默认
+              </el-tag>
+            </div>
+            <div v-if="row.description" class="template-desc">{{ row.description }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="任务" width="80" align="center">
+          <template #default="{ row }">{{ row.tasks.length }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="290" align="right">
+          <template #default="{ row }">
+            <el-button size="small" text @click="copyTemplate(row)">复制</el-button>
+            <el-button
+              size="small"
+              text
+              :disabled="row.isBuiltin"
+              :title="row.isBuiltin ? '内置模板不可修改，请先复制' : ''"
+              @click="openTemplateEdit(row)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              size="small"
+              text
+              :disabled="templates.defaultId === row.id"
+              @click="setDefaultTemplate(row)"
+            >
+              设为默认
+            </el-button>
+            <el-button
+              size="small"
+              text
+              type="danger"
+              :disabled="row.isBuiltin"
+              @click="removeTemplate(row)"
+            >
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </section>
+
+    <section class="block cf-card">
       <h2 class="block__title">数据与日志</h2>
       <el-descriptions :column="1" border>
         <el-descriptions-item label="应用版本">
@@ -192,27 +270,80 @@
         数据库保存的是作品与素材索引，真实文件始终保存在你选择的磁盘目录中。
       </p>
     </section>
+    <TemplateEditorDialog
+      v-model="templateDialogVisible"
+      :template="editingTemplate"
+      @saved="templates.load()"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useBackupStore } from '@/stores/backup'
+import TemplateEditorDialog from '@/components/TemplateEditorDialog.vue'
 import { useCacheStore } from '@/stores/cache'
 import { useSettingsStore } from '@/stores/settings'
+import { useTemplatesStore } from '@/stores/templates'
 import { isTauriRuntime } from '@/services/ipc'
-import type { BackupEntry } from '@/types'
+import type { BackupEntry, WorkTemplate } from '@/types'
 import { formatBytes, formatDateTime } from '@/utils/format'
 
 const settings = useSettingsStore()
 const backup = useBackupStore()
 const cache = useCacheStore()
+const templates = useTemplatesStore()
+
+const templateDialogVisible = ref(false)
+const editingTemplate = ref<WorkTemplate | null>(null)
 
 async function chooseRoot(): Promise<void> {
   const ok = await settings.chooseWorkspaceRoot()
   if (ok) ElMessage.success('作品根目录已保存')
   else if (settings.error) ElMessage.error(settings.error)
+}
+
+function openTemplateCreate(): void {
+  editingTemplate.value = null
+  templateDialogVisible.value = true
+}
+
+function openTemplateEdit(template: WorkTemplate): void {
+  editingTemplate.value = template
+  templateDialogVisible.value = true
+}
+
+async function copyTemplate(template: WorkTemplate): Promise<void> {
+  const created = await templates.copy(template.id)
+  if (created) ElMessage.success(`已创建「${created.name}」`)
+  else ElMessage.error(templates.error ?? '复制模板失败')
+}
+
+async function setDefaultTemplate(template: WorkTemplate): Promise<void> {
+  const ok = await templates.setDefault(template.id)
+  if (ok) ElMessage.success(`默认模板已设为「${template.name}」`)
+  else ElMessage.error(templates.error ?? '设置默认模板失败')
+}
+
+async function removeTemplate(template: WorkTemplate): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `删除模板「${template.name}」？已创建的作品任务不受影响。`,
+      '删除模板',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+  const ok = await templates.remove(template.id)
+  if (ok) ElMessage.success('模板已删除')
+  else ElMessage.error(templates.error ?? '删除模板失败')
 }
 
 async function chooseBackupDirectory(): Promise<void> {
@@ -306,7 +437,7 @@ async function copy(value: string | undefined): Promise<void> {
 
 onMounted(async () => {
   if (!isTauriRuntime()) return
-  await Promise.all([settings.load(), backup.load(), cache.load()])
+  await Promise.all([settings.load(), backup.load(), cache.load(), templates.load()])
 })
 </script>
 
@@ -346,6 +477,26 @@ onMounted(async () => {
 
 .inline-error {
   margin-top: 12px;
+}
+
+.template-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.template-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.template-desc {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--cf-text-muted);
 }
 
 .cache-usage {

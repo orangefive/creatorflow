@@ -4,4 +4,6 @@ pub mod import_jobs;
 pub mod sections;
 pub mod settings;
 pub mod tags;
+pub mod tasks;
+pub mod templates;
 pub mod works;

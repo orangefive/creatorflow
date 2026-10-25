@@ -13,6 +13,7 @@ use crate::infrastructure::filesystem;
 use crate::infrastructure::recycle_bin;
 use crate::repositories::{activity, assets, sections, works};
 use crate::services::settings_service;
+use crate::services::template_service;
 
 pub const MANIFEST_FILE_NAME: &str = "creatorflow.manifest.json";
 
@@ -104,7 +105,16 @@ pub fn create_work(database: &Database, input: CreateWorkInput) -> AppResult<Wor
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let template_key = input.template_key.clone();
+    // 模板 id 与清单里的 template_key 共用同一字段；先校验存在性，避免创建到一半才失败
+    let template_key = input
+        .template_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(template_id) = &template_key {
+        template_service::get_template(database, template_id)?;
+    }
 
     let mut work = Work {
         id: work_id.clone(),
@@ -143,6 +153,9 @@ pub fn create_work(database: &Database, input: CreateWorkInput) -> AppResult<Wor
                 .map_err(|error| AppError::db_context("无法开启分区登记事务", error))?;
             for section in &rows {
                 sections::insert(&transaction, section)?;
+            }
+            if let Some(template_id) = &template_key {
+                template_service::apply_template(&transaction, &work.id, template_id, &created_at)?;
             }
             transaction
                 .commit()

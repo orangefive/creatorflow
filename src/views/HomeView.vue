@@ -176,7 +176,7 @@ async function chooseRoot(): Promise<void> {
 }
 
 function openWork(workId: string): void {
-  router.push(`/works/${workId}/documents`)
+  router.push(`/works/${workId}/overview`)
 }
 
 function onWorkCreated(work: Work): void {

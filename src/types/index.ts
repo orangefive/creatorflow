@@ -304,3 +304,84 @@ export interface BatchOutcome {
   succeeded: number
   failed: BatchFailure[]
 }
+
+export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled'
+export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent'
+
+export interface Task {
+  id: string
+  workId: string
+  title: string
+  description: string | null
+  status: TaskStatus
+  priority: TaskPriority
+  dueAt: string | null
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+  completedAt: string | null
+  isOverdue: boolean
+}
+
+export interface TaskInput {
+  title: string
+  description?: string | null
+  priority?: TaskPriority
+  dueAt?: string | null
+  status?: TaskStatus
+}
+
+export interface TaskQuery {
+  status?: TaskStatus | null
+  priority?: TaskPriority | null
+  overdueOnly?: boolean
+  sortKey?: 'manual' | 'created_at' | 'due_at' | 'priority'
+  sortDirection?: 'asc' | 'desc'
+}
+
+export interface TaskSummary {
+  total: number
+  todo: number
+  inProgress: number
+  done: number
+  cancelled: number
+  overdue: number
+  completionRate: number | null
+}
+
+export interface WorkDashboard {
+  work: Work
+  summary: TaskSummary
+  upcoming: Task[]
+  recentAssets: Asset[]
+}
+
+export interface TemplateTask {
+  id: string
+  title: string
+  description: string | null
+  priority: TaskPriority
+  sortOrder: number
+}
+
+export interface WorkTemplate {
+  id: string
+  name: string
+  description: string | null
+  isBuiltin: boolean
+  createdAt: string
+  updatedAt: string
+  tasks: TemplateTask[]
+}
+
+export interface TemplateTaskInput {
+  title: string
+  description?: string | null
+  priority?: TaskPriority
+}
+
+export interface TemplateInput {
+  name: string
+  description?: string | null
+  tasks: TemplateTaskInput[]
+}

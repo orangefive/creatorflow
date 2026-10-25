@@ -30,6 +30,31 @@
         />
       </el-form-item>
 
+      <el-form-item label="作品模板">
+        <el-select v-model="form.templateId" class="template-select" placeholder="选择模板">
+          <el-option label="空白作品（不生成任务）" value="" />
+          <el-option
+            v-for="template in templates.items"
+            :key="template.id"
+            :label="template.isBuiltin ? `${template.name}（内置）` : template.name"
+            :value="template.id"
+          />
+        </el-select>
+        <div v-if="selectedTemplate" class="template-preview">
+          <div class="template-preview__title">
+            {{ selectedTemplate.name }}
+            <span class="cf-muted">· {{ selectedTemplate.tasks.length }} 个初始任务</span>
+          </div>
+          <p v-if="selectedTemplate.description" class="template-preview__desc">
+            {{ selectedTemplate.description }}
+          </p>
+          <ol class="template-preview__list">
+            <li v-for="task in selectedTemplate.tasks" :key="task.id">{{ task.title }}</li>
+          </ol>
+        </div>
+        <p v-else class="field-hint">不套用模板时，作品创建后只有四个空分区，可以稍后手动添加任务。</p>
+      </el-form-item>
+
       <el-form-item label="作品存放目录" required>
         <div class="path-row">
           <el-input :model-value="form.rootDirectory" readonly placeholder="请选择作品根目录" />
@@ -54,6 +79,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
+import { useTemplatesStore } from '@/stores/templates'
 import { useWorksStore } from '@/stores/works'
 import type { Work } from '@/types'
 import { validateWorkName } from '@/utils/validation'
@@ -66,6 +92,7 @@ const emit = defineEmits<{
 
 const settings = useSettingsStore()
 const works = useWorksStore()
+const templates = useTemplatesStore()
 
 const visible = computed({
   get: () => props.modelValue,
@@ -76,16 +103,28 @@ const form = reactive({
   name: '',
   description: '',
   rootDirectory: '',
+  templateId: '',
 })
+
+const selectedTemplate = computed(
+  () => templates.items.find((template) => template.id === form.templateId) ?? null,
+)
 
 const nameError = ref<string | null>(null)
 const submitting = ref(false)
 
 watch(
   () => props.modelValue,
-  (open) => {
-    if (open && !form.rootDirectory) {
+  async (open) => {
+    if (!open) return
+    if (!form.rootDirectory) {
       form.rootDirectory = settings.settings.workspaceRoot ?? ''
+    }
+    if (templates.items.length === 0) {
+      await templates.load()
+    }
+    if (!form.templateId) {
+      form.templateId = templates.defaultId ?? ''
     }
   },
 )
@@ -118,7 +157,7 @@ async function submit(): Promise<void> {
     name: form.name.trim(),
     description: form.description.trim() ? form.description.trim() : null,
     rootDirectory: form.rootDirectory,
-    templateKey: 'video-basic',
+    templateKey: form.templateId || null,
   })
   submitting.value = false
 
@@ -144,6 +183,38 @@ async function submit(): Promise<void> {
   font-size: 12px;
   line-height: 1.6;
   margin-top: 2px;
+}
+
+.template-select {
+  width: 100%;
+}
+
+.template-preview {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8f9fb;
+  border: 1px solid var(--cf-border);
+}
+
+.template-preview__title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.template-preview__desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--cf-text-muted);
+}
+
+.template-preview__list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--cf-text-muted);
+  line-height: 1.7;
 }
 
 .field-hint {

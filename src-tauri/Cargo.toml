@@ -1,6 +1,6 @@
 [package]
 name = "creatorflow"
-version = "0.3.0"
+version = "0.4.0"
 description = "CreatorFlow 桌面端"
 authors = ["orangefive"]
 edition = "2021"

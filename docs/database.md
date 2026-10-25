@@ -108,13 +108,59 @@ PRAGMA busy_timeout = 5000;
 
 记录作品创建/重命名/归档、导入完成/失败等关键动作；`details_json` 只存摘要，不写入文件内容。
 
+### 3.7 任务与模板（0005 新增）
+
+**tasks**
+
+| 列 | 说明 |
+|---|---|
+| `id` | 主键 |
+| `work_id` | 外键 → `works(id)`，`ON DELETE CASCADE` |
+| `title` / `description` | 标题（1—120 字符）与可选描述 |
+| `status` | `todo` / `in_progress` / `done` / `cancelled` |
+| `priority` | `low` / `normal` / `high` / `urgent` |
+| `due_at` | 可选，UTC ISO-8601 |
+| `sort_order` | 手工顺序，上移/下移时重排 |
+| `completed_at` | 与 `status = done` 保持一致 |
+
+索引：`(work_id, status)`、`(work_id, sort_order, created_at)`、`(work_id, due_at)`。
+
+**work_templates**
+
+| 列 | 说明 |
+|---|---|
+| `id` | 主键；内置模板固定为 `builtin-*` |
+| `name` / `description` | 模板名称与说明 |
+| `is_builtin` | 1 表示内置，禁止修改与删除 |
+
+**template_tasks**
+
+| 列 | 说明 |
+|---|---|
+| `id` | 主键 |
+| `template_id` | 外键 → `work_templates(id)`，`ON DELETE CASCADE` |
+| `title` / `description` / `priority` | 初始任务内容 |
+| `sort_order` | 在模板中的顺序 |
+
 ## 4. 一致性约定
 
 - 数据库是**索引**，真实文件在磁盘。文件缺失时保留记录并标记 `missing`，绝不静默删除。
 - 复制与数据库登记不是原子操作，因此 `import_jobs` 承担状态机职责，并由启动恢复服务兜底。
 - 时间统一 UTC ISO-8601（毫秒精度，`Z` 后缀）；前端按本地时区展示。
+- 任务与模板不是引用关系：应用模板时把 `template_tasks` 复制为 `tasks`，之后两者互不影响。
+- 任务状态与 `completed_at` 必须一致：`done` 有完成时间，其余状态为空。
 
-## 5. 备份与恢复（0.3.0）
+## 5. 迁移历史
+
+| 版本 | 文件 | 内容 |
+|---|---|---|
+| 1 | `0001_initial.sql` | 作品、分区、素材、导入任务、设置、活动记录 |
+| 2 | `0002_asset_metadata.sql` | 素材媒体元数据与缩略图字段 |
+| 3 | `0003_tags.sql` | 标签与关联表 |
+| 4 | `0004_archive_restore.sql` | 归档前状态、作品列表索引 |
+| 5 | `0005_tasks_and_templates.sql` | 任务、模板、模板任务与三个内置模板 |
+
+## 6. 备份与恢复（0.3.0）
 
 ### 5.1 为什么不能直接复制 `.db`
 

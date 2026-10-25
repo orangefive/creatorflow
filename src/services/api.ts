@@ -13,6 +13,14 @@ import type {
   AssetPage,
   AssetQuery,
   BatchOutcome,
+  Task,
+  TaskInput,
+  TaskQuery,
+  TaskStatus,
+  TaskSummary,
+  TemplateInput,
+  WorkDashboard,
+  WorkTemplate,
   CreateWorkInput,
   ImportJob,
   MediaCapabilities,
@@ -109,4 +117,30 @@ export const cacheApi = {
   stats: () => call<CacheStats>('get_cache_stats'),
   setLimit: (bytes: number) => call<number>('set_cache_limit', { bytes }),
   clear: () => call<CacheCleanupResult>('clear_thumbnail_cache'),
+}
+
+export const taskApi = {
+  dashboard: (workId: string) => call<WorkDashboard>('get_work_dashboard', { workId }),
+  list: (workId: string, query: TaskQuery) => call<Task[]>('list_tasks', { workId, query }),
+  summary: (workId: string) => call<TaskSummary>('get_task_summary', { workId }),
+  create: (workId: string, input: TaskInput) => call<Task>('create_task', { workId, input }),
+  update: (taskId: string, input: TaskInput) => call<Task>('update_task', { taskId, input }),
+  setStatus: (taskId: string, status: TaskStatus) =>
+    call<Task>('set_task_status', { taskId, status }),
+  remove: (taskId: string) => call<void>('delete_task', { taskId }),
+  move: (taskId: string, direction: 'up' | 'down') =>
+    call<Task>('move_task', { taskId, direction }),
+}
+
+export const templateApi = {
+  list: () => call<WorkTemplate[]>('list_templates'),
+  get: (templateId: string) => call<WorkTemplate>('get_template', { templateId }),
+  create: (input: TemplateInput) => call<WorkTemplate>('create_template', { input }),
+  copy: (templateId: string, name?: string) =>
+    call<WorkTemplate>('copy_template', { templateId, name: name ?? null }),
+  update: (templateId: string, input: TemplateInput) =>
+    call<WorkTemplate>('update_template', { templateId, input }),
+  remove: (templateId: string) => call<void>('delete_template', { templateId }),
+  setDefault: (templateId: string) => call<string>('set_default_template', { templateId }),
+  default: () => call<WorkTemplate>('get_default_template'),
 }

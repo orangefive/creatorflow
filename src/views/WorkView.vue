@@ -64,7 +64,24 @@
       :title="works.error"
     />
 
-    <el-tabs :model-value="activeSection" class="section-tabs" @update:model-value="switchSection">
+    <el-tabs :model-value="activeTab" class="section-tabs" @update:model-value="switchTab">
+      <el-tab-pane name="overview">
+        <template #label>
+          <span class="tab-label">
+            <component :is="LayoutDashboard" :size="15" :stroke-width="1.7" />
+            工作台
+          </span>
+        </template>
+      </el-tab-pane>
+      <el-tab-pane name="tasks">
+        <template #label>
+          <span class="tab-label">
+            <component :is="ListChecks" :size="15" :stroke-width="1.7" />
+            任务
+            <span class="tab-count">{{ taskCount }}</span>
+          </span>
+        </template>
+      </el-tab-pane>
       <el-tab-pane
         v-for="section in sections"
         :key="section.key"
@@ -82,15 +99,38 @@
 
     <div class="work-content">
       <el-skeleton v-if="loadingWork" :rows="6" animated />
-      <AssetListView
-        v-else-if="work && activeSection"
-        :key="`${work.id}-${activeSection}`"
-        :work-id="work.id"
-        :section-key="activeSection"
-        @changed="reload"
-      />
+      <template v-else-if="work">
+        <WorkDashboard
+          v-if="activeTab === 'overview'"
+          :key="`dashboard-${work.id}-${dashboardVersion}`"
+          :work-id="work.id"
+          @open-tasks="switchTab('tasks')"
+          @create-task="openTaskDialog"
+          @open-section="switchTab"
+        />
+        <TaskPanel
+          v-else-if="activeTab === 'tasks'"
+          :key="`tasks-${work.id}`"
+          :work-id="work.id"
+          @changed="onTasksChanged"
+        />
+        <AssetListView
+          v-else
+          :key="`${work.id}-${activeTab}`"
+          :work-id="work.id"
+          :section-key="activeTab as SectionKey"
+          @changed="reload"
+        />
+      </template>
       <div v-else class="cf-empty">作品不存在或已被移除</div>
     </div>
+
+    <TaskFormDialog
+      v-model="taskDialogVisible"
+      :work-id="workId"
+      :task="null"
+      @saved="onTasksChanged"
+    />
   </div>
 </template>
 
@@ -98,8 +138,20 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChevronLeft, FileText, AudioLines, Image as ImageIcon, Video } from '@lucide/vue'
+import {
+  ChevronLeft,
+  FileText,
+  AudioLines,
+  Image as ImageIcon,
+  LayoutDashboard,
+  ListChecks,
+  Video,
+} from '@lucide/vue'
 import AssetListView from '@/views/AssetListView.vue'
+import TaskFormDialog from '@/components/TaskFormDialog.vue'
+import TaskPanel from '@/components/TaskPanel.vue'
+import WorkDashboard from '@/components/WorkDashboard.vue'
+import { taskApi } from '@/services/api'
 import WorkStatusTag from '@/components/WorkStatusTag.vue'
 import {
   SECTION_KEYS,
@@ -118,18 +170,24 @@ const works = useWorksStore()
 const settings = useSettingsStore()
 const imports = useImportsStore()
 const loadingWork = ref(true)
+const taskCount = ref(0)
+const taskDialogVisible = ref(false)
+const dashboardVersion = ref(0)
 
 const workId = computed(() => String(route.params.workId ?? ''))
 const work = computed(() => works.currentWork)
 const sections = computed(() => works.sections)
 
-const activeSection = computed<SectionKey>(() => {
+type WorkTab = 'overview' | 'tasks' | SectionKey
+
+const activeTab = computed<WorkTab>(() => {
   const raw = route.params.sectionKey
   const value = Array.isArray(raw) ? raw[0] : raw
+  if (value === 'overview' || value === 'tasks') return value
   if (value && (SECTION_KEYS as string[]).includes(value)) {
     return value as SectionKey
   }
-  return 'documents'
+  return 'overview'
 })
 
 function sectionIcon(key: SectionKey) {
@@ -151,16 +209,40 @@ async function load(): Promise<void> {
   loadingWork.value = false
   if (loaded) {
     await settings.rememberLastOpened(loaded.id)
+    try {
+      const summary = await taskApi.summary(loaded.id)
+      taskCount.value = summary.total
+    } catch {
+      taskCount.value = 0
+    }
   }
+}
+
+function openTaskDialog(): void {
+  taskDialogVisible.value = true
+}
+
+async function onTasksChanged(): Promise<void> {
+  if (!work.value) return
+  try {
+    const summary = await taskApi.summary(work.value.id)
+    taskCount.value = summary.total
+  } catch {
+    taskCount.value = 0
+  }
+  // 让工作台在切回时重新拉取统计
+  dashboardVersion.value += 1
 }
 
 async function reload(): Promise<void> {
   await load()
 }
 
-function switchSection(name: string | number): void {
-  const key = String(name) as SectionKey
-  if (!(SECTION_KEYS as string[]).includes(key)) return
+function switchTab(name: string | number): void {
+  const key = String(name)
+  if (key !== 'overview' && key !== 'tasks' && !(SECTION_KEYS as string[]).includes(key)) {
+    return
+  }
   router.replace(`/works/${workId.value}/${key}`)
 }
 

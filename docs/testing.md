@@ -70,7 +70,24 @@
 | `relocation_accepts_matching_content_without_confirmation` | 哈希一致时直接关联，`hashMatches = true` |
 | `relocation_rejects_files_outside_work_directory` | 作品目录外的文件被拒绝（`invalid_input`） |
 
-### 1.4 前端（`vitest`）
+### 1.4 第四阶段集成测试（`tests/phase4_flow.rs`）
+
+| 测试 | 验证点 |
+|---|---|
+| `upgrades_phase_three_database_and_keeps_data` | 由 0001—0004 构造的 0.3.0 库升级到 5，作品保留、三个内置模板就位 |
+| `task_lifecycle_and_completion_time` | 创建 → 完成写入 completed_at → 重开清空 → 编辑 → 删除 |
+| `rejects_invalid_task_input_and_missing_work` | 空标题、非法状态、`work_id` 不存在均失败 |
+| `progress_ignores_cancelled_and_reports_no_tasks` | done/cancelled 口径；只有已取消任务时 completionRate 为 null |
+| `overdue_only_counts_open_tasks_with_past_due_date` | 逾期判定与「只看逾期」筛选；已完成任务不算逾期 |
+| `tasks_follow_manual_order_and_move` | 手工顺序、上移、顶部上移不变 |
+| `filters_by_status_and_priority` | 状态与优先级筛选 |
+| `builtin_templates_exist_with_initial_tasks` | 三个内置模板及任务数量与内容 |
+| `copying_editing_deleting_and_default_template` | 复制/编辑/删除/设为默认；内置模板禁止改删；删除默认后回落 |
+| `creating_work_with_template_writes_snapshot_tasks` | 新建作品写入 5 条任务；改模板不影响已有作品 |
+| `creating_work_with_unknown_template_fails_without_leftovers` | 未知模板直接失败，无作品记录、无目录 |
+| `dashboard_aggregates_tasks_and_recent_assets` | 工作台聚合；归档作品拒绝新增任务 |
+
+### 1.5 前端（`vitest`）
 
 | 文件 | 覆盖内容 |
 |---|---|
@@ -78,11 +95,12 @@
 | `src/utils/validation.spec.ts` | 与 Rust 一致的作品名称校验规则 |
 | `src/stores/assets.spec.ts` | 查询参数与分页拼装、缺失数量统计、失败时清空并记录错误、翻页边界、重置筛选、标签增删与错误回传 |
 | `src/stores/imports.spec.ts` | 进度事件应用到对应任务、未知任务忽略、完成信号只触发一次、活动/失败任务分类、移除记录 |
+| `src/stores/tasks.spec.ts` | 加载列表与统计、失败时报错、创建后刷新、创建失败不报成功、状态切换 |
 | `src/stores/globalSearch.spec.ts` | 筛选变更重置分页、分页边界与页数计算、失败时清空结果并记录错误、重置全部筛选 |
 | `src/stores/works.spec.ts` | 删除后从列表移除、删除失败保留记录并回传错误、删除当前作品时清空上下文、恢复归档后替换记录、恢复失败回传后端文案 |
 | `src/components/WorkStatusTag.spec.ts` | 状态文案与标签类型渲染 |
 
-### 1.5 测试分层与说明
+### 1.6 测试分层与说明
 
 | 层级 | 覆盖内容 | 能否代表桌面端 |
 |---|---|---|
@@ -105,19 +123,19 @@ npm run rust:test     # cargo test
 npm run tauri:build   # 生产构建 + 安装包
 ```
 
-## 3. 实际执行结果（0.3.0，2026-10-25）
+## 3. 实际执行结果（0.4.0，2026-10-25）
 
 | 命令 | 结果 |
 |---|---|
 | `npm run typecheck` | 通过（0 error） |
 | `npm run lint` | 通过（0 error / 0 warning） |
-| `npm run test` | 7 个测试文件、40 个用例全部通过 |
+| `npm run test` | 8 个测试文件、45 个用例全部通过 |
 | `npm run rust:fmt` | 通过 |
 | `npm run rust:clippy` | 通过（`--all-targets -- -D warnings`，无告警） |
-| `npm run rust:test` | 52 单元 + 11 集成（一阶段）+ 20 集成（二阶段）+ 8 集成（三阶段，另 1 项 `#[ignore]`）= **91 通过** |
-| `npm run tauri:build` | 通过：`src-tauri/target/release/bundle/nsis/CreatorFlow_0.3.0_x64-setup.exe` |
+| `npm run rust:test` | 55 单元 + 11 集成（一阶段）+ 20 集成（二阶段）+ 8 集成（三阶段，另 1 项 `#[ignore]`）+ 12 集成（四阶段）= **106 通过** |
+| `npm run tauri:build` | 通过：`src-tauri/target/release/bundle/nsis/CreatorFlow_0.4.0_x64-setup.exe` |
 
-历史结果：0.2.1 为 36 个前端用例、72 个 Rust 测试；0.2.0 为 31 / 65；0.1.0 为 23 / 38。
+历史结果：0.3.0 为 40 个前端用例、91 个 Rust 测试；0.2.1 为 36 / 72；0.2.0 为 31 / 65；0.1.0 为 23 / 38。
 
 **性能测量（debug 构建，5000 条素材，5 个作品）**
 
@@ -193,12 +211,22 @@ comctl32 v5 并在启动时报 `0xc0000139`。`src-tauri/build.rs` 通过
 35. **缓存管理**：设置页查看缓存占用与文件数；把上限改小后保存 → 提示生效值；点「清理全部缓存」→ 占用归零，回到作品页浏览，缩略图会重新生成。
 36. **批量操作**：在素材列表勾选多条 → 出现「已选 N 项」；批量添加标签后所有选中项出现该标签；批量移除后消失；批量移入回收站后列表移除且系统回收站中有对应文件。
 
+37. **工作台**：首页打开任意作品应直接进入「工作台」标签；核对完成率、总数/未完成/逾期、待办列表与最近素材；四个分区入口只出现在顶部标签，工作台底部不应再有重复卡片。
+38. **新建任务**：工作台点「新建任务」→ 填标题、优先级、截止时间 → 保存后待办列表与统计立即更新。
+39. **任务完成/重开**：任务页点「完成」→ 状态变已完成、完成率变化、completed_at 有值；点「重新打开」恢复。
+40. **逾期**：把一个未完成任务的截止时间设为昨天 → 行内出现「逾期」标记，统计里的逾期数 +1；勾选「只看逾期」只剩它。
+41. **任务排序与筛选**：切换「按优先级」「按截止时间」；在手工顺序下用「更多 → 上移/下移」调整顺序，刷新后顺序保持。
+42. **模板新建作品**：首页「新建作品」→ 选择「播客 / 音频节目」→ 预览显示 5 个初始任务 → 创建后任务页应有 5 条待办。
+43. **空白作品**：模板选「空白作品」→ 创建后任务页为空，工作台显示「尚无任务」而不是 0%。
+44. **模板管理**：设置页「作品模板」→ 复制内置模板得到自定义模板 → 编辑其任务 → 设为默认 → 删除；内置模板的「编辑/删除」应为禁用。
+45. **模板隔离**：修改自定义模板的任务后，之前用该模板创建的作品任务数量不变。
+
 ## 5. 已知未覆盖
 
 - 无 Playwright/Tauri 端到端自动化：当前以手动验收步骤 + 单元/集成测试覆盖。
 - 未覆盖真实磁盘写满、只读目录、网络盘断开等场景的自动化测试。
 - 视频封面生成依赖本机 ffmpeg，未在自动化测试中验证（无稳定测试样本）。
 - 回收站被文件占用而失败的分支未自动化（需要独占打开文件），只做了手动验收步骤。
-- **原生桌面 E2E 不可用（已实测）**：`tauri-driver 2.1.0` 可安装、`msedgedriver 155.0.4283.62` 与 WebView2 版本匹配、`POST /session` 能返回 sessionId，但应用在自动化模式下没有创建 `msedgewebview2.exe`，随后命令全部返回 `invalid session id`。浏览器 mock 截图只验证前端渲染，**不能**视为桌面端验收通过。
+- **原生桌面 E2E 不可用（0.3.0 与 0.4.0 各实测一次）**：`tauri-driver 2.1.0` 可安装、`msedgedriver 155.0.4283.62` 与 WebView2 版本匹配、`POST /session` 能返回 sessionId，但应用在自动化模式下没有创建 `msedgewebview2.exe`，随后命令全部返回 `invalid session id`。浏览器 mock 截图只验证前端渲染，**不能**视为桌面端验收通过。
 - 备份恢复的「切换文件失败」「迁移失败回滚」分支只有代码路径与设计说明，未能在自动化中构造（需要注入文件系统故障）。
 - 原生窗口内容无法自动截图（WebView2 合成层限制），界面验证使用浏览器渲染截图。

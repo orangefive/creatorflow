@@ -31,6 +31,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0004_archive_restore",
         sql: include_str!("../../../migrations/0004_archive_restore.sql"),
     },
+    Migration {
+        version: 5,
+        name: "0005_tasks_and_templates",
+        sql: include_str!("../../../migrations/0005_tasks_and_templates.sql"),
+    },
 ];
 
 pub fn latest_version() -> i64 {

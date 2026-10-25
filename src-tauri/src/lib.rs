@@ -165,6 +165,22 @@ pub fn run() {
             commands::cache_commands::get_cache_stats,
             commands::cache_commands::set_cache_limit,
             commands::cache_commands::clear_thumbnail_cache,
+            commands::task_commands::get_work_dashboard,
+            commands::task_commands::list_tasks,
+            commands::task_commands::get_task_summary,
+            commands::task_commands::create_task,
+            commands::task_commands::update_task,
+            commands::task_commands::set_task_status,
+            commands::task_commands::delete_task,
+            commands::task_commands::move_task,
+            commands::template_commands::list_templates,
+            commands::template_commands::get_template,
+            commands::template_commands::create_template,
+            commands::template_commands::copy_template,
+            commands::template_commands::update_template,
+            commands::template_commands::delete_template,
+            commands::template_commands::set_default_template,
+            commands::template_commands::get_default_template,
         ])
         .run(tauri::generate_context!())
         .expect("CreatorFlow 启动失败");

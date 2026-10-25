@@ -48,7 +48,7 @@ impl TestEnv {
                 name: name.to_string(),
                 description: Some("集成测试作品".to_string()),
                 root_directory: None,
-                template_key: Some("video-basic".to_string()),
+                template_key: Some("builtin-video".to_string()),
             },
         )
         .expect("创建作品失败")
@@ -95,7 +95,7 @@ fn create_work_builds_directories_manifest_and_sections() {
     assert_eq!(manifest["schemaVersion"], 1);
     assert_eq!(manifest["workId"], work.id);
     assert_eq!(manifest["name"], "我的第一支视频");
-    assert_eq!(manifest["templateKey"], "video-basic");
+    assert_eq!(manifest["templateKey"], "builtin-video");
 
     let stored = env
         .database

@@ -182,6 +182,41 @@ GlobalSearchView → AssetQuery（work_id 可空）
 - 批量标签：先 `tags::ensure` 复用同名标签，再逐个 `attach`/`detach`，失败项记录素材名与错误文案。
 - 前端多选使用 `el-table` selection，操作后清空选择并刷新列表与分区计数。
 
+### 3.11 作品工作台与任务（0.4.0）
+
+```text
+/works/:id/overview → WorkDashboard
+  get_work_dashboard(work_id)
+    ├─ works::find + tasks::summary
+    ├─ tasks::list(manual) → 过滤未完成 → 取前 5 条
+    └─ asset_service::search(work 内, created_at desc, limit 6)
+
+任务操作：create / update / set_status / move / delete
+```
+
+- **进度**：`done / (todo + in_progress + done)`；`cancelled` 不进分母；分母为 0 时返回 `null`，界面显示「尚无任务」而不是 0%。
+- **逾期**：`due_at` 早于当前时间且状态为 `todo` / `in_progress`；列表行由 `map_task` 计算，统计由 SQL `SUM` 计算，两处口径一致。
+- **completed_at 一致性**：状态切到 `done` 时写入（已有值则保留），切到其他状态时清空。
+- **排序**：`manual`（sort_order、created_at）、`created_at`、`due_at`（NULL 排最后）、`priority`（CASE 权重）；上移/下移会按手工顺序重排为 0..n-1，单事务完成。
+- **作品状态约束**：归档、创建中、创建失败的作品拒绝新增任务。
+
+### 3.12 作品模板（0.4.0）
+
+```text
+work_templates (id, name, description, is_builtin, …)
+template_tasks (id, template_id → work_templates, title, priority, sort_order, …)
+
+新建作品 → create_work(template_key = 模板 id)
+  ├─ 创建前校验模板存在（不存在直接失败，不落盘）
+  ├─ 建目录 / 写 manifest / 插 sections / 复制任务 —— 同一个业务事务
+  └─ 任一步失败 → 清理目录并删除作品记录（沿用第一阶段逻辑）
+```
+
+- **内置模板**：id 固定为 `builtin-video` / `builtin-clip` / `builtin-podcast`，迁移中写入；`is_builtin` 决定是否允许编辑/删除。
+- **快照语义**：应用模板是复制任务记录，作品与模板之间没有引用，模板后续修改不影响已有作品。
+- **默认模板**：保存在 `app_settings.default_template_id`；读取时校验模板仍存在，否则回落 `builtin-video`；删除默认模板时清理该设置。
+- **空白作品**：不传 `template_key` 即不生成任务。
+
 ## 4. 安全设计
 
 1. **路径穿越防护**：`normalize_relative` 拒绝绝对路径、盘符、`..`、控制字符；`resolve_within` 再对最近的已存在祖先做 canonicalize 并校验前缀，防止符号链接逃逸。
@@ -193,6 +228,7 @@ GlobalSearchView → AssetQuery（work_id 可空）
 7. **删除可回退**：删除只走系统回收站 + 数据库软删除，应用内没有任何不可恢复的抹除路径；回收站失败即中止，不会只删一半。
 8. **备份可验证**：备份必须通过 `integrity_check`、`foreign_key_check` 与清单哈希校验；恢复前自动生成当前库快照，失败回滚。
 9. **缓存可再生成**：清理缓存只删除缓存目录内的 jpg，不涉及作品目录与素材记录。
+10. **模板只读内置**：内置模板禁止修改与删除，界面与后端都做校验；模板变更不会回溯修改已有作品。
 
 ## 5. 错误模型
 
@@ -208,7 +244,7 @@ GlobalSearchView → AssetQuery（work_id 可空）
 - **元数据队列**：单线程顺序处理，避免图片解码或 ffmpeg 并发抢占 CPU。
 - 进度写库与事件都做了节流，避免频繁锁争用与前端重绘。
 
-## 7. 已知技术债（0.3.0）
+## 7. 已知技术债（0.4.0）
 
 - 重命名时 manifest 重写失败只记录警告，不回滚（manifest 为辅助识别文件）。
 - 素材列表的存在性校准已改为按目录批量枚举（0.3.0），目录极大时仍会一次性列出全部文件名。
@@ -216,6 +252,8 @@ GlobalSearchView → AssetQuery（work_id 可空）
 - 搜索使用 `LIKE '%关键词%'`，数据量大时无法命中索引，可考虑 FTS5。
 - 缩略图缓存没有容量上限与清理策略。
 - 音频波形、批量重命名尚未实现。
-- 桌面端 E2E 未自动化，依赖手工验收清单（见 `docs/testing.md`）。
+- 任务未与素材关联（没有 task_assets 表），跨作品任务视图也未提供。
+- 模板名称没有唯一约束，允许重名，靠 id 区分。
+- 桌面端 E2E 仍不可用：驱动可连、WebView2 在自动化模式下不初始化（0.4.0 复测结论一致），依赖手工验收清单。
 - 回收站操作依赖系统对话框行为：文件体积超过回收站容量时会由系统提示「将永久删除」，该提示在后台线程中弹出。
 - 未实现数据库备份 UI。
