@@ -101,6 +101,10 @@ export interface Asset {
   thumbnailPath: string | null
   thumbnailError: string | null
   tags: Tag[]
+  /** 所属作品名称，跨作品检索时用于区分 */
+  workName: string | null
+  /** 所属分区 */
+  sectionKey: SectionKey | null
 }
 
 export interface AssetQuery {
@@ -224,4 +228,79 @@ export interface StartupRecoveryReport {
   failedJobs: number
   cleanedTemporaryFiles: number
   messages: string[]
+}
+
+export interface BackupManifest {
+  formatVersion: number
+  appVersion: string
+  schemaVersion: number
+  createdAt: string
+  databaseFile: string
+  sizeBytes: number
+  sha256: string
+  integrityOk: boolean
+  foreignKeysOk: boolean
+}
+
+export interface BackupEntry {
+  path: string
+  fileName: string
+  sizeBytes: number
+  createdAt: string | null
+  valid: boolean
+  problem: string | null
+  manifest: BackupManifest | null
+}
+
+export interface BackupOverview {
+  directory: string
+  databasePath: string
+  schemaVersion: number
+  latestSchemaVersion: number
+  entries: BackupEntry[]
+}
+
+export interface BackupVerification {
+  valid: boolean
+  integrityOk: boolean
+  foreignKeysOk: boolean
+  schemaVersion: number
+  problem: string | null
+}
+
+export interface RestoreOutcome {
+  restoredFrom: string
+  backupSchemaVersion: number
+  currentSchemaVersion: number
+  safetySnapshot: string
+  integrityOk: boolean
+  foreignKeysOk: boolean
+}
+
+export interface CacheStats {
+  directory: string
+  totalBytes: number
+  fileCount: number
+  limitBytes: number
+  minLimitBytes: number
+  maxLimitBytes: number
+}
+
+export interface CacheCleanupResult {
+  removedFiles: number
+  freedBytes: number
+  remainingBytes: number
+  skippedFiles: number
+  failures: number
+}
+
+export interface BatchFailure {
+  id: string
+  name: string
+  message: string
+}
+
+export interface BatchOutcome {
+  succeeded: number
+  failed: BatchFailure[]
 }

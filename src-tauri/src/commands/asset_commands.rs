@@ -3,6 +3,7 @@ use tauri::State;
 
 use crate::commands::blocking;
 use crate::domain::asset::{Asset, Tag};
+use crate::domain::batch::BatchOutcome;
 use crate::domain::query::{AssetPage, AssetQuery};
 use crate::domain::relocation::RelocationResult;
 use crate::domain::section::SectionKey;
@@ -171,4 +172,52 @@ pub async fn delete_asset(state: State<'_, AppState>, asset_id: String) -> AppRe
     let state = state.inner().clone();
     let cache = state.thumbnail_cache.clone();
     blocking(move || asset_service::delete_asset(&state.database, &asset_id, &cache)).await
+}
+
+/// 跨作品列出全部标签。
+#[tauri::command]
+pub async fn list_all_tags(state: State<'_, AppState>) -> AppResult<Vec<Tag>> {
+    let state = state.inner().clone();
+    blocking(move || tag_service::list_all_tags(&state.database)).await
+}
+
+/// 批量删除素材：逐个移入系统回收站，返回逐项结果。
+#[tauri::command]
+pub async fn batch_delete_assets(
+    state: State<'_, AppState>,
+    asset_ids: Vec<String>,
+) -> AppResult<BatchOutcome> {
+    let state = state.inner().clone();
+    let cache = state.thumbnail_cache.clone();
+    blocking(move || {
+        Ok(asset_service::delete_assets(
+            &state.database,
+            &asset_ids,
+            &cache,
+        ))
+    })
+    .await
+}
+
+/// 批量为素材添加标签（同名标签复用）。
+#[tauri::command]
+pub async fn batch_add_tag(
+    state: State<'_, AppState>,
+    tag_name: String,
+    asset_ids: Vec<String>,
+) -> AppResult<BatchOutcome> {
+    let state = state.inner().clone();
+    blocking(move || tag_service::add_tag_to_assets(&state.database, &tag_name, &asset_ids)).await
+}
+
+/// 批量移除素材上的指定标签。
+#[tauri::command]
+pub async fn batch_remove_tag(
+    state: State<'_, AppState>,
+    tag_id: String,
+    asset_ids: Vec<String>,
+) -> AppResult<BatchOutcome> {
+    let state = state.inner().clone();
+    blocking(move || tag_service::remove_tag_from_assets(&state.database, &tag_id, &asset_ids))
+        .await
 }

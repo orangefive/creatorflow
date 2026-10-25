@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -12,6 +12,7 @@ use crate::errors::{AppError, AppResult};
 use crate::infrastructure::database::Database;
 use crate::infrastructure::filesystem;
 use crate::repositories::{assets, works};
+use crate::services::cache_service;
 use crate::services::media_service::{MediaService, ProbeResult};
 
 pub const ASSET_METADATA_EVENT: &str = "asset://metadata";
@@ -30,6 +31,7 @@ pub struct MetadataService {
     app: Option<AppHandle>,
     database: Arc<Database>,
     media: Arc<MediaService>,
+    cache_directory: PathBuf,
     sender: Mutex<Option<Sender<String>>>,
     started: AtomicBool,
 }
@@ -39,7 +41,8 @@ impl MetadataService {
         Self {
             app,
             database,
-            media: Arc::new(MediaService::new(cache_root)),
+            media: Arc::new(MediaService::new(cache_root.clone())),
+            cache_directory: cache_root,
             sender: Mutex::new(None),
             started: AtomicBool::new(false),
         }
@@ -65,9 +68,10 @@ impl MetadataService {
         let app = self.app.clone();
         let database = Arc::clone(&self.database);
         let media = Arc::clone(&self.media);
+        let cache = self.cache_directory.clone();
         std::thread::spawn(move || {
             while let Ok(asset_id) = receiver.recv() {
-                if let Err(error) = process_asset(&app, &database, &media, &asset_id) {
+                if let Err(error) = process_asset(&app, &database, &media, &cache, &asset_id) {
                     tracing::warn!(
                         asset_id = %asset_id,
                         message = %error.message,
@@ -112,7 +116,13 @@ impl MetadataService {
 
     /// 同步提取（命令重试与测试使用）。
     pub fn process_now(&self, asset_id: &str) -> AppResult<()> {
-        process_asset(&self.app, &self.database, &self.media, asset_id)
+        process_asset(
+            &self.app,
+            &self.database,
+            &self.media,
+            &self.cache_directory,
+            asset_id,
+        )
     }
 }
 
@@ -120,6 +130,7 @@ fn process_asset(
     app: &Option<AppHandle>,
     database: &Database,
     media: &MediaService,
+    cache_directory: &Path,
     asset_id: &str,
 ) -> AppResult<()> {
     let asset = database.with_conn(|connection| {
@@ -185,6 +196,10 @@ fn process_asset(
         if let Err(error) = app.emit(ASSET_METADATA_EVENT, event) {
             tracing::warn!(error = %error, "发送素材元数据事件失败");
         }
+    }
+
+    if result.thumbnail.status == ThumbnailStatus::Ready {
+        cache_service::maybe_enforce(database, cache_directory);
     }
 
     tracing::debug!(

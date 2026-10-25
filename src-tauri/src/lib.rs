@@ -139,7 +139,11 @@ pub fn run() {
             commands::asset_commands::remove_asset_tag,
             commands::asset_commands::retry_asset_metadata,
             commands::asset_commands::delete_asset,
+            commands::asset_commands::batch_delete_assets,
+            commands::asset_commands::batch_add_tag,
+            commands::asset_commands::batch_remove_tag,
             commands::asset_commands::get_media_capabilities,
+            commands::asset_commands::list_all_tags,
             commands::asset_commands::get_asset_preview,
             commands::asset_commands::open_asset,
             commands::asset_commands::reveal_asset,
@@ -153,6 +157,14 @@ pub fn run() {
             commands::settings_commands::set_workspace_root,
             commands::settings_commands::set_last_opened_work,
             commands::settings_commands::get_app_info,
+            commands::backup_commands::get_backup_overview,
+            commands::backup_commands::create_database_backup,
+            commands::backup_commands::verify_database_backup,
+            commands::backup_commands::restore_database_backup,
+            commands::backup_commands::set_backup_directory,
+            commands::cache_commands::get_cache_stats,
+            commands::cache_commands::set_cache_limit,
+            commands::cache_commands::clear_thumbnail_cache,
         ])
         .run(tauri::generate_context!())
         .expect("CreatorFlow 启动失败");

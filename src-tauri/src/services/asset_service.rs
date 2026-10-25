@@ -5,6 +5,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
 use crate::domain::asset::{mime_for_extension, Asset, AssetStatus, MediaKind};
+use crate::domain::batch::BatchOutcome;
 use crate::domain::query::{AssetPage, AssetQuery, NormalizedAssetQuery};
 use crate::domain::relocation::RelocationResult;
 use crate::domain::section::SectionKey;
@@ -35,11 +36,77 @@ fn resolve_assets_path(root: &Path, items: &mut [Asset]) {
     }
 }
 
-/// 对当前页素材做存在性校准：缺失标为 `missing`，恢复则回到 `ready`。
-fn reconcile_status(database: &Database, items: &mut [Asset]) {
+fn load_work_roots(
+    database: &Database,
+    items: &[Asset],
+) -> AppResult<std::collections::HashMap<String, PathBuf>> {
+    let mut ids: Vec<String> = items.iter().map(|asset| asset.work_id.clone()).collect();
+    ids.sort();
+    ids.dedup();
+    let mut roots = std::collections::HashMap::new();
+    for work_id in ids {
+        if let Some(work) = database.with_conn(|connection| works::find(connection, &work_id))? {
+            roots.insert(work_id, PathBuf::from(work.root_path));
+        }
+    }
+    Ok(roots)
+}
+
+fn resolve_assets_path_multi(
+    roots: &std::collections::HashMap<String, PathBuf>,
+    items: &mut [Asset],
+) {
     for asset in items.iter_mut() {
-        let absolute = PathBuf::from(&asset.absolute_path);
-        let exists = absolute.is_file();
+        match roots.get(&asset.work_id) {
+            Some(root) => match filesystem::resolve_within(root, &asset.relative_path) {
+                Ok(path) => asset.absolute_path = filesystem::path_to_string(&path),
+                Err(_) => asset.absolute_path = filesystem::path_to_string(root),
+            },
+            None => {
+                tracing::warn!(asset_id = %asset.id, "素材所属作品不存在，跳过路径解析");
+            }
+        }
+    }
+}
+
+/// 对当前页素材做存在性校准：缺失标为 `missing`，恢复则回到 `ready`。
+///
+/// 按目录批量读取文件名，避免为每个素材单独 `stat`：一页 50 条素材通常只落在
+/// 1—4 个分区目录里，目录枚举次数因此与页大小无关。
+fn reconcile_status(database: &Database, items: &mut [Asset]) {
+    use std::collections::{HashMap, HashSet};
+
+    let mut directories: HashMap<PathBuf, Option<HashSet<String>>> = HashMap::new();
+    for asset in items.iter() {
+        let path = PathBuf::from(&asset.absolute_path);
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        directories.entry(parent.to_path_buf()).or_insert_with(|| {
+            let read_dir = fs::read_dir(parent).ok()?;
+            let mut names = HashSet::new();
+            for entry in read_dir.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    names.insert(name.to_lowercase());
+                }
+            }
+            Some(names)
+        });
+    }
+
+    for asset in items.iter_mut() {
+        let path = PathBuf::from(&asset.absolute_path);
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let lower = file_name.to_lowercase();
+        let exists = path
+            .parent()
+            .and_then(|parent| directories.get(parent))
+            .and_then(|names| names.as_ref())
+            .map(|names| names.contains(&lower))
+            .unwrap_or(false);
+
         let desired = if exists {
             AssetStatus::Ready
         } else {
@@ -93,6 +160,11 @@ pub fn search(
     if let Some(work) = &work {
         let root = PathBuf::from(&work.root_path);
         resolve_assets_path(&root, &mut page.items);
+        reconcile_status(database, &mut page.items);
+    } else {
+        // 跨作品查询：按结果中出现的作品分别解析根目录
+        let roots = load_work_roots(database, &page.items)?;
+        resolve_assets_path_multi(&roots, &mut page.items);
         reconcile_status(database, &mut page.items);
     }
     for asset in page.items.iter_mut() {
@@ -383,4 +455,32 @@ pub fn delete_asset(database: &Database, asset_id: &str, thumbnail_cache: &Path)
 
     tracing::info!(asset_id, work_id = %asset.work_id, "素材已删除并移入回收站");
     Ok(())
+}
+
+/// 批量删除素材：逐个移入回收站，失败项单独返回，不影响其他项目。
+pub fn delete_assets(
+    database: &Database,
+    asset_ids: &[String],
+    thumbnail_cache: &Path,
+) -> BatchOutcome {
+    let mut outcome = BatchOutcome::new();
+    for asset_id in asset_ids {
+        let name = database
+            .with_conn(|connection| assets::find_by_id(connection, asset_id))
+            .ok()
+            .flatten()
+            .map(|asset| asset.display_name)
+            .unwrap_or_else(|| asset_id.clone());
+
+        match delete_asset(database, asset_id, thumbnail_cache) {
+            Ok(()) => outcome.record_success(),
+            Err(error) => outcome.record_failure(asset_id, &name, error.message),
+        }
+    }
+    tracing::info!(
+        succeeded = outcome.succeeded,
+        failed = outcome.failed.len(),
+        "批量删除素材完成"
+    );
+    outcome
 }

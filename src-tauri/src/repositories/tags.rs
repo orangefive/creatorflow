@@ -191,6 +191,32 @@ pub fn detach_all(connection: &Connection, asset_id: &str) -> AppResult<usize> {
         .map_err(|error| AppError::db_context("无法清理素材标签", error))
 }
 
+/// 全部标签（跨作品），用于全局搜索的标签筛选。
+pub fn list_all(connection: &Connection) -> AppResult<Vec<Tag>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT t.id, t.name, COUNT(at.asset_id) AS asset_count
+             FROM tags t
+             LEFT JOIN asset_tags at ON at.tag_id = t.id
+             LEFT JOIN assets a ON a.id = at.asset_id AND a.deleted_at IS NULL
+             GROUP BY t.id, t.name
+             HAVING asset_count > 0
+             ORDER BY t.normalized_name ASC",
+        )
+        .map_err(|error| AppError::db_context("无法查询标签", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                asset_count: row.get(2)?,
+            })
+        })
+        .map_err(|error| AppError::db_context("无法查询标签", error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::db_context("读取标签失败", error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

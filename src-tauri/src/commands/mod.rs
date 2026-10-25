@@ -1,4 +1,6 @@
 pub mod asset_commands;
+pub mod backup_commands;
+pub mod cache_commands;
 pub mod import_commands;
 pub mod settings_commands;
 pub mod work_commands;

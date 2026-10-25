@@ -3,6 +3,7 @@ use rusqlite::{params, params_from_iter, Connection, Row};
 
 use crate::domain::asset::{Asset, AssetStatus, MediaKind, MetadataStatus, ThumbnailStatus};
 use crate::domain::query::{AssetPage, AssetSortKey, NormalizedAssetQuery};
+use crate::domain::section::SectionKey;
 use crate::errors::{AppError, AppResult};
 
 /// 插入素材所需的字段（`absolutePath` 由服务层按需解析，不落库）。
@@ -30,7 +31,8 @@ const SELECT_COLUMNS: &str = "
     a.created_at, a.updated_at, a.sha256,
     a.width, a.height, a.duration_ms, a.frame_rate, a.sample_rate, a.channels, a.codec,
     a.metadata_status, a.metadata_error, a.thumbnail_status, a.thumbnail_relative_path,
-    a.thumbnail_error
+    a.thumbnail_error,
+    w.name AS work_name, s.key AS section_key
 ";
 
 fn map_asset(row: &Row<'_>) -> rusqlite::Result<Asset> {
@@ -86,6 +88,11 @@ fn map_asset(row: &Row<'_>) -> rusqlite::Result<Asset> {
         thumbnail_path: None,
         thumbnail_error: row.get("thumbnail_error")?,
         tags: Vec::new(),
+        work_name: row.get::<_, String>("work_name").ok(),
+        section_key: row
+            .get::<_, String>("section_key")
+            .ok()
+            .and_then(|value| SectionKey::parse(&value).ok()),
     })
 }
 
@@ -120,8 +127,12 @@ pub fn insert(connection: &Connection, asset: &NewAsset) -> AppResult<()> {
 }
 
 pub fn find_by_id(connection: &Connection, asset_id: &str) -> AppResult<Option<Asset>> {
-    let sql =
-        format!("SELECT {SELECT_COLUMNS} FROM assets a WHERE a.id = ?1 AND a.deleted_at IS NULL");
+    let sql = format!(
+        "SELECT {SELECT_COLUMNS} FROM assets a
+             LEFT JOIN works w ON w.id = a.work_id
+             LEFT JOIN sections s ON s.id = a.section_id
+             WHERE a.id = ?1 AND a.deleted_at IS NULL"
+    );
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| AppError::db_context("无法查询素材", error))?;
@@ -145,6 +156,8 @@ pub fn find_by_relative_path(
 ) -> AppResult<Option<Asset>> {
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM assets a
+         LEFT JOIN works w ON w.id = a.work_id
+         LEFT JOIN sections s ON s.id = a.section_id
          WHERE a.work_id = ?1 AND a.relative_path = ?2 AND a.deleted_at IS NULL"
     );
     let mut statement = connection
@@ -199,8 +212,10 @@ fn build_filters(query: &NormalizedAssetQuery) -> (String, Vec<Value>) {
         );
     }
     if query.keyword.is_some() {
-        conditions
-            .push("(a.display_name LIKE ? ESCAPE '\\' OR a.original_name LIKE ? ESCAPE '\\')");
+        conditions.push(
+            "(a.display_name LIKE ? ESCAPE '\\' OR a.original_name LIKE ? ESCAPE '\\' \
+              OR w.name LIKE ? ESCAPE '\\')",
+        );
     }
 
     // 参数顺序必须与 conditions 中的占位符顺序一致
@@ -221,6 +236,7 @@ fn build_filters(query: &NormalizedAssetQuery) -> (String, Vec<Value>) {
     }
     if let Some(keyword) = &query.keyword {
         let pattern = format!("%{}%", escape_like(keyword));
+        values.push(Value::Text(pattern.clone()));
         values.push(Value::Text(pattern.clone()));
         values.push(Value::Text(pattern));
     }
@@ -244,7 +260,10 @@ pub fn search(connection: &Connection, query: &NormalizedAssetQuery) -> AppResul
     let (where_clause, values) = build_filters(query);
 
     let count_sql = format!(
-        "SELECT COUNT(*) FROM assets a JOIN sections s ON s.id = a.section_id WHERE {where_clause}"
+        "SELECT COUNT(*) FROM assets a
+         JOIN sections s ON s.id = a.section_id
+         JOIN works w ON w.id = a.work_id
+         WHERE {where_clause}"
     );
     let total: i64 = connection
         .query_row(&count_sql, params_from_iter(values.iter()), |row| {
@@ -254,7 +273,9 @@ pub fn search(connection: &Connection, query: &NormalizedAssetQuery) -> AppResul
 
     let sql = format!(
         "SELECT {SELECT_COLUMNS}
-         FROM assets a JOIN sections s ON s.id = a.section_id
+         FROM assets a
+         JOIN sections s ON s.id = a.section_id
+         JOIN works w ON w.id = a.work_id
          WHERE {where_clause}
          ORDER BY {}
          LIMIT ? OFFSET ?",

@@ -114,8 +114,43 @@ PRAGMA busy_timeout = 5000;
 - 复制与数据库登记不是原子操作，因此 `import_jobs` 承担状态机职责，并由启动恢复服务兜底。
 - 时间统一 UTC ISO-8601（毫秒精度，`Z` 后缀）；前端按本地时区展示。
 
-## 5. 备份注意事项
+## 5. 备份与恢复（0.3.0）
 
-- **不要**在应用运行时只复制 `creatorflow.db`：WAL 模式下还有 `-wal` / `-shm` 文件，直接复制可能拿到不一致快照。
-- 正确做法：先退出应用，再复制整个数据目录；或使用 SQLite Online Backup API（`rusqlite::backup`）做热备份。
-- 第二阶段将提供「数据库安全备份 / 恢复校验」UI 与自动备份策略。
+### 5.1 为什么不能直接复制 `.db`
+
+WAL 模式下已提交但未 checkpoint 的数据仍在 `creatorflow.db-wal` 中，运行中只复制主库文件可能得到旧快照或损坏文件。
+应用改为一律通过 SQLite 在线备份接口生成快照。
+
+### 5.2 备份产物
+
+| 文件 | 说明 |
+|---|---|
+| `creatorflow-YYYYMMDD-HHMMSS.db` | 数据库快照（`journal_mode = DELETE`，单文件可用） |
+| `creatorflow-YYYYMMDD-HHMMSS.db.json` | 清单：格式版本、应用版本、schema 版本、创建时间、文件名、大小、SHA-256、校验结果 |
+| `pre-restore-YYYYMMDD-HHMMSS.db` | 恢复前自动生成的当前库安全快照 |
+
+默认目录 `%APPDATA%\com.creatorflow.desktop\backups\`，可在设置页更改（必须是绝对路径）。
+
+### 5.3 校验规则
+
+- `PRAGMA integrity_check` 必须返回 `ok`。
+- `PRAGMA foreign_key_check` 必须为空。
+- 必须存在 `schema_migrations`，且最高版本 ≥ 1 且 ≤ 当前应用的最新版本。
+- 若清单存在，文件 SHA-256 必须与清单一致。
+
+任一条不通过即标记为不可恢复；界面显示原因，不提供恢复按钮。
+
+### 5.4 恢复流程
+
+1. 校验所选备份；
+2. 用在线备份接口为当前数据库生成 `pre-restore-*` 快照并校验；
+3. 将备份复制到 `<db>.restoring` 并再次校验；
+4. `Database::replace_with`：持锁 checkpoint → 关闭连接 → 旧库改名 `.pre-restore` → 候选改名到位 → 重开连接并执行迁移；
+5. 迁移失败或打开失败：回滚 `.pre-restore` 并重新打开原库。
+
+旧 schema 的备份允许恢复，重开连接时由既有迁移升级（0.1.0 → 0.3.0 会依次执行 0002—0004）。来自更高版本的备份直接拒绝。
+
+### 5.5 备份范围
+
+只包含数据库：作品/分区/素材索引、标签、导入任务、设置与活动记录。
+**不包含**作品目录中的视频、音频、图片等原文件，也不包含缩略图缓存（可再生成）。

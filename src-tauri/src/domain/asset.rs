@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::domain::section::SectionKey;
 use crate::errors::{AppError, AppResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +176,10 @@ pub struct Asset {
     pub thumbnail_path: Option<String>,
     pub thumbnail_error: Option<String>,
     pub tags: Vec<Tag>,
+    /// 跨作品查询时用于标识所属作品；单作品查询同样填充
+    pub work_name: Option<String>,
+    /// 素材所属分区（documents/audio/video/images）
+    pub section_key: Option<SectionKey>,
 }
 
 impl Asset {

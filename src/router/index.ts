@@ -15,6 +15,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '作品' },
   },
   {
+    path: '/search',
+    name: 'search',
+    component: () => import('@/views/GlobalSearchView.vue'),
+    meta: { title: '全局搜索' },
+  },
+  {
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/SettingsView.vue'),

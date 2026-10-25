@@ -135,6 +135,53 @@ AssetListView → imports.start → invoke start_import
 - **删除作品**：同时软删除该作品下全部素材，并清理 `<app_cache>/thumbnails/<workId>/`，缓存可按需重建。
 - **文件已缺失时**：仍允许删除记录，不再尝试回收站；路径解析失败（记录异常）时只记日志，绝不触碰作品目录以外的文件。
 
+### 3.7 全局搜索（0.3.0）
+
+```text
+GlobalSearchView → AssetQuery（work_id 可空）
+  → assets::search：assets JOIN sections JOIN works
+  → 条件：关键词（display_name / original_name / works.name）、作品、分区、类型、状态、标签
+  → 排序白名单 + LIMIT/OFFSET；总数用同一 WHERE 单独 COUNT
+  → 结果按所属作品分别解析根目录，再批量校准存在性
+```
+
+- 关键词同时匹配作品名，便于「只记得作品名」的场景。
+- 标签过滤使用 `EXISTS (SELECT 1 FROM asset_tags ...)`，按素材维度判断，不会跨作品串数据。
+- 结果携带 `work_name` 与 `section_key`，界面无需二次查询。
+- 跨作品时不复用单作品路径根，改为按 `work_id` 分组解析（`resolve_assets_path_multi`）。
+
+### 3.8 数据库备份与恢复（0.3.0）
+
+```text
+创建：rusqlite::backup 生成快照 → PRAGMA integrity_check + foreign_key_check
+     → 计算 SHA-256 → 写 <db>.json 清单（格式版本/应用版本/schema 版本/时间/大小/校验结果）
+
+恢复：校验输入（完整性、外键、schema ≤ 当前）→ 为当前库生成 pre-restore 快照
+     → 复制到 <db>.restoring 并再次校验 → Database::replace_with
+         → 持锁 checkpoint → 关闭旧连接 → 旧文件改名 .pre-restore
+         → 候选改名到位 → 重开连接并执行迁移
+         → 任一步失败：回滚 .pre-restore，重新打开原库
+```
+
+- **写入屏障**：`replace_with` 全程持有连接互斥锁，其他命令在此期间阻塞，避免活动连接写入旧文件。
+- **WAL 安全**：不使用文件复制作为备份手段；切换前 `wal_checkpoint(TRUNCATE)`。
+- **旧 schema**：允许恢复，重开连接时按既有迁移升级；出现「结构版本高于当前应用」直接拒绝。
+- **只备份索引**：作品原文件与缩略图缓存不在备份内，设置页与 README 明确说明。
+
+### 3.9 缩略图缓存管理（0.3.0）
+
+- 统计：递归枚举缓存目录中的 `.jpg/.jpeg`，得到文件数与总字节；跳过非缩略图文件。
+- 上限：`app_settings.thumbnail_cache_limit_bytes`，默认 2 GiB，读写时裁剪到 256 MiB—20 GiB。
+- 超限清理：按修改时间升序删除，直到降到上限内；1 分钟内修改过的文件跳过，避免删到正在写入的缩略图。
+- 触发：每生成 25 个缩略图检查一次（`WRITE_COUNTER` 原子计数），也可在设置页手动清理全部。
+- 清理只作用于缓存目录内、扩展名为 jpg 的文件，不触碰素材原文件与索引记录。
+
+### 3.10 批量操作（0.3.0）
+
+- 批量删除复用单条删除路径（回收站 + 软删除 + 标签解绑 + 缩略图清理），逐项返回 `{ succeeded, failed[] }`。
+- 批量标签：先 `tags::ensure` 复用同名标签，再逐个 `attach`/`detach`，失败项记录素材名与错误文案。
+- 前端多选使用 `el-table` selection，操作后清空选择并刷新列表与分区计数。
+
 ## 4. 安全设计
 
 1. **路径穿越防护**：`normalize_relative` 拒绝绝对路径、盘符、`..`、控制字符；`resolve_within` 再对最近的已存在祖先做 canonicalize 并校验前缀，防止符号链接逃逸。
@@ -144,6 +191,8 @@ AssetListView → imports.start → invoke start_import
 5. **最小权限**：capabilities 仅放行事件与文件选择对话框。
 6. **数据库损坏防护**：外键开启、WAL、busy_timeout=5s；迁移逐版本事务执行。
 7. **删除可回退**：删除只走系统回收站 + 数据库软删除，应用内没有任何不可恢复的抹除路径；回收站失败即中止，不会只删一半。
+8. **备份可验证**：备份必须通过 `integrity_check`、`foreign_key_check` 与清单哈希校验；恢复前自动生成当前库快照，失败回滚。
+9. **缓存可再生成**：清理缓存只删除缓存目录内的 jpg，不涉及作品目录与素材记录。
 
 ## 5. 错误模型
 
@@ -159,12 +208,14 @@ AssetListView → imports.start → invoke start_import
 - **元数据队列**：单线程顺序处理，避免图片解码或 ffmpeg 并发抢占 CPU。
 - 进度写库与事件都做了节流，避免频繁锁争用与前端重绘。
 
-## 7. 已知技术债（0.2.0）
+## 7. 已知技术债（0.3.0）
 
 - 重命名时 manifest 重写失败只记录警告，不回滚（manifest 为辅助识别文件）。
-- 素材列表的存在性校准对当前页逐条 `stat`，超大分区可改为批量或缓存。
+- 素材列表的存在性校准已改为按目录批量枚举（0.3.0），目录极大时仍会一次性列出全部文件名。
+- 全局搜索使用 `LIKE`，未迁移 FTS5；5000 条规模实测可接受。
 - 搜索使用 `LIKE '%关键词%'`，数据量大时无法命中索引，可考虑 FTS5。
 - 缩略图缓存没有容量上限与清理策略。
-- 音频波形、跨作品搜索入口、批量删除尚未实现。
+- 音频波形、批量重命名尚未实现。
+- 桌面端 E2E 未自动化，依赖手工验收清单（见 `docs/testing.md`）。
 - 回收站操作依赖系统对话框行为：文件体积超过回收站容量时会由系统提示「将永久删除」，该提示在后台线程中弹出。
 - 未实现数据库备份 UI。

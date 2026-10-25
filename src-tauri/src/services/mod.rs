@@ -1,4 +1,6 @@
 pub mod asset_service;
+pub mod backup_service;
+pub mod cache_service;
 pub mod import_service;
 pub mod media_service;
 pub mod metadata_service;

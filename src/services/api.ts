@@ -2,10 +2,17 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { call, isTauriRuntime } from './ipc'
 import type {
   AppInfo,
+  BackupEntry,
+  BackupOverview,
+  BackupVerification,
+  CacheCleanupResult,
+  CacheStats,
+  RestoreOutcome,
   AppSettings,
   Asset,
   AssetPage,
   AssetQuery,
+  BatchOutcome,
   CreateWorkInput,
   ImportJob,
   MediaCapabilities,
@@ -44,12 +51,18 @@ export const assetApi = {
     call<RelocationResult>('relocate_asset', { assetId, newPath, allowMismatch }),
   retryMetadata: (assetId: string) => call<Asset>('retry_asset_metadata', { assetId }),
   remove: (assetId: string) => call<void>('delete_asset', { assetId }),
+  batchDelete: (assetIds: string[]) => call<BatchOutcome>('batch_delete_assets', { assetIds }),
   capabilities: () => call<MediaCapabilities>('get_media_capabilities'),
 }
 
 export const tagApi = {
   listForWork: (workId: string) => call<Tag[]>('list_work_tags', { workId }),
   listForAsset: (assetId: string) => call<Tag[]>('list_asset_tags', { assetId }),
+  listAll: () => call<Tag[]>('list_all_tags'),
+  batchAdd: (tagName: string, assetIds: string[]) =>
+    call<BatchOutcome>('batch_add_tag', { tagName, assetIds }),
+  batchRemove: (tagId: string, assetIds: string[]) =>
+    call<BatchOutcome>('batch_remove_tag', { tagId, assetIds }),
   add: (assetId: string, name: string) => call<Tag[]>('add_asset_tag', { assetId, name }),
   remove: (assetId: string, tagId: string) =>
     call<Tag[]>('remove_asset_tag', { assetId, tagId }),
@@ -82,4 +95,18 @@ export function thumbnailUrl(absolutePath: string | null): string | null {
   } catch {
     return null
   }
+}
+
+export const backupApi = {
+  overview: () => call<BackupOverview>('get_backup_overview'),
+  create: () => call<BackupEntry>('create_database_backup'),
+  verify: (path: string) => call<BackupVerification>('verify_database_backup', { path }),
+  restore: (path: string) => call<RestoreOutcome>('restore_database_backup', { path }),
+  setDirectory: (path: string) => call<string>('set_backup_directory', { path }),
+}
+
+export const cacheApi = {
+  stats: () => call<CacheStats>('get_cache_stats'),
+  setLimit: (bytes: number) => call<number>('set_cache_limit', { bytes }),
+  clear: () => call<CacheCleanupResult>('clear_thumbnail_cache'),
 }

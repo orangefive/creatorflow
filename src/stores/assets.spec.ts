@@ -55,6 +55,8 @@ function makeAsset(overrides: Partial<Asset> = {}): Asset {
     thumbnailRelativePath: null,
     thumbnailPath: null,
     thumbnailError: null,
+    workName: '测试作品',
+    sectionKey: 'documents',
     tags: [],
     ...overrides,
   }

@@ -21,7 +21,8 @@ export const useSettingsStore = defineStore('settings', () => {
         settingsApi.get(),
         settingsApi.info(),
       ])
-      settings.value = loadedSettings
+      // 后端异常返回空值时保持默认结构，避免模板解构崩溃
+      settings.value = loadedSettings ?? { workspaceRoot: null, lastOpenedWorkId: null }
       info.value = loadedInfo
     } catch (cause) {
       const ipcError = toIpcError(cause)
@@ -42,7 +43,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loading.value = true
     error.value = null
     try {
-      settings.value = await settingsApi.setWorkspaceRoot(path)
+      settings.value = (await settingsApi.setWorkspaceRoot(path)) ?? settings.value
       return true
     } catch (cause) {
       const ipcError = toIpcError(cause)
@@ -61,7 +62,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function rememberLastOpened(workId: string | null): Promise<void> {
     try {
-      settings.value = await settingsApi.setLastOpenedWork(workId)
+      settings.value = (await settingsApi.setLastOpenedWork(workId)) ?? settings.value
     } catch {
       // 记住上次打开的作品属于非关键体验，失败不影响主流程，故不打扰用户
     }

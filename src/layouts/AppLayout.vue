@@ -55,7 +55,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { FolderOpen, House, Inbox, Settings } from '@lucide/vue'
+import { FolderOpen, House, Inbox, Search, Settings } from '@lucide/vue'
 import { isTauriRuntime } from '@/services/ipc'
 import { useImportsStore } from '@/stores/imports'
 import { useSettingsStore } from '@/stores/settings'
@@ -69,7 +69,7 @@ const tauriReady = ref(isTauriRuntime())
 const version = computed(() => settings.info?.version ?? '0.1.0')
 
 interface NavItem {
-  key: 'home' | 'all'
+  key: 'home' | 'all' | 'search'
   to: string
   label: string
   icon: Component
@@ -78,9 +78,11 @@ interface NavItem {
 const primaryNav: NavItem[] = [
   { key: 'home', to: '/', label: '首页', icon: House },
   { key: 'all', to: '/?view=all', label: '所有作品', icon: FolderOpen },
+  { key: 'search', to: '/search', label: '全局搜索', icon: Search },
 ]
 
-const activeNavKey = computed<'home' | 'all'>(() => {
+const activeNavKey = computed<'home' | 'all' | 'search'>(() => {
+  if (route.path.startsWith('/search')) return 'search'
   if (route.path.startsWith('/works')) return 'all'
   return route.query.view === 'all' ? 'all' : 'home'
 })

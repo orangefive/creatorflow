@@ -89,15 +89,36 @@
       title="未检测到 ffmpeg：仍可导入视频并读取 MP4/MOV 时长与分辨率，但不会生成视频封面。"
     />
 
+    <div v-if="selected.length > 0" class="batch-bar cf-card">
+      <span class="batch-count">已选 {{ selected.length }} 项</span>
+      <el-select
+        v-model="batchTagId"
+        class="batch-tag"
+        placeholder="选择标签"
+        clearable
+        filterable
+      >
+        <el-option v-for="tag in tags" :key="tag.id" :label="tag.name" :value="tag.id" />
+      </el-select>
+      <el-button :disabled="!batchTagId" @click="batchRemoveTag">移除标签</el-button>
+      <el-button @click="batchAddTag">添加标签…</el-button>
+      <span class="cf-spacer" />
+      <el-button type="danger" plain @click="batchDelete">移入回收站</el-button>
+      <el-button text @click="clearSelection">取消选择</el-button>
+    </div>
+
     <div class="asset-list cf-card">
       <el-table
+        ref="tableRef"
         v-loading="assets.loading"
         :data="assets.items"
         row-key="id"
         height="100%"
         :empty-text="emptyText"
         @row-dblclick="onRowDoubleClick"
+        @selection-change="onSelectionChange"
       >
+        <el-table-column type="selection" width="44" />
         <el-table-column label="" width="68">
           <template #default="{ row }">
             <div class="thumb">
@@ -305,11 +326,21 @@ import {
   MEDIA_KIND_OPTIONS,
   SECTION_META,
 } from '@/constants/sections'
+import { assetApi, tagApi } from '@/services/api'
 import { isTauriRuntime, toIpcError } from '@/services/ipc'
 import { onAssetMetadata } from '@/services/events'
 import { useAssetsStore } from '@/stores/assets'
 import { useImportsStore } from '@/stores/imports'
-import type { Asset, AssetStatus, ImportCandidate, MediaKind, SectionKey, Tag } from '@/types'
+import type { TableInstance } from 'element-plus'
+import type {
+  Asset,
+  AssetStatus,
+  BatchOutcome,
+  ImportCandidate,
+  MediaKind,
+  SectionKey,
+  Tag,
+} from '@/types'
 import {
   formatBytes,
   formatDateTime,
@@ -319,6 +350,10 @@ import {
 } from '@/utils/format'
 
 const emit = defineEmits<{ changed: [] }>()
+
+const tableRef = ref<TableInstance | null>(null)
+const selected = ref<Asset[]>([])
+const batchTagId = ref('')
 
 const props = defineProps<{ workId: string; sectionKey: SectionKey }>()
 
@@ -402,6 +437,107 @@ function tagOptions(asset: Asset): Tag[] {
 
 async function load(): Promise<void> {
   await assets.fetchAssets(props.workId, props.sectionKey)
+}
+
+function onSelectionChange(rows: Asset[]): void {
+  selected.value = rows
+}
+
+function clearSelection(): void {
+  tableRef.value?.clearSelection()
+  selected.value = []
+  batchTagId.value = ''
+}
+
+function reportBatch(outcome: BatchOutcome, action: string): boolean {
+  if (outcome.failed.length === 0) {
+    ElMessage.success(`${action}成功：${outcome.succeeded} 项`)
+    return true
+  }
+  const first = outcome.failed[0]
+  const sample = first ? `（例：${first.name} — ${first.message}）` : ''
+  ElMessage.warning(
+    `${action}完成：成功 ${outcome.succeeded} 项，失败 ${outcome.failed.length} 项${sample}`,
+  )
+  return false
+}
+
+async function batchAddTag(): Promise<void> {
+  if (selected.value.length === 0) return
+  let name = ''
+  try {
+    const result = await ElMessageBox.prompt(
+      `为所选 ${selected.value.length} 个素材添加标签，同名标签会自动复用。`,
+      '批量添加标签',
+      {
+        confirmButtonText: '添加',
+        cancelButtonText: '取消',
+        inputPlaceholder: '标签名称',
+        inputValidator: (value: string) => (value.trim() ? true : '标签名称不能为空'),
+      },
+    )
+    name = result.value.trim()
+  } catch {
+    return
+  }
+
+  try {
+    const outcome = await tagApi.batchAdd(
+      name,
+      selected.value.map((asset) => asset.id),
+    )
+    reportBatch(outcome, '添加标签')
+    await Promise.all([load(), loadTags()])
+    clearSelection()
+    emit('changed')
+  } catch (cause) {
+    ElMessage.error(toIpcError(cause).message)
+  }
+}
+
+async function batchRemoveTag(): Promise<void> {
+  if (!batchTagId.value || selected.value.length === 0) return
+  try {
+    const outcome = await tagApi.batchRemove(
+      batchTagId.value,
+      selected.value.map((asset) => asset.id),
+    )
+    reportBatch(outcome, '移除标签')
+    await Promise.all([load(), loadTags()])
+    clearSelection()
+    emit('changed')
+  } catch (cause) {
+    ElMessage.error(toIpcError(cause).message)
+  }
+}
+
+async function batchDelete(): Promise<void> {
+  if (selected.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `将所选的 ${selected.value.length} 个素材移入系统回收站？\n\n` +
+        '文件可从回收站还原；应用内的素材记录会同时移除。',
+      '批量移入回收站',
+      {
+        confirmButtonText: '移入回收站',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  try {
+    const outcome = await assetApi.batchDelete(selected.value.map((asset) => asset.id))
+    reportBatch(outcome, '移入回收站')
+    await load()
+    clearSelection()
+    emit('changed')
+  } catch (cause) {
+    ElMessage.error(toIpcError(cause).message)
+  }
 }
 
 async function removeAsset(asset: Asset): Promise<void> {
@@ -632,12 +768,21 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 浏览器预览模式下没有真实的事件后端，取消订阅可能抛错，这里不应影响页面卸载
   if (unlistenDragDrop) {
-    unlistenDragDrop()
+    try {
+      unlistenDragDrop()
+    } catch {
+      // 忽略：预览环境无原生拖拽订阅
+    }
     unlistenDragDrop = null
   }
   if (unlistenMetadata) {
-    unlistenMetadata()
+    try {
+      unlistenMetadata()
+    } catch {
+      // 忽略：预览环境无原生事件订阅
+    }
     unlistenMetadata = null
   }
   if (searchTimer) clearTimeout(searchTimer)
@@ -686,6 +831,24 @@ onUnmounted(() => {
 
 .notice {
   margin-bottom: 10px;
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.batch-count {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--cf-text);
+}
+
+.batch-tag {
+  width: 160px;
 }
 
 .asset-list {

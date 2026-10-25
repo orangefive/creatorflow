@@ -52,11 +52,25 @@
 | `deleting_work_recycles_directory_and_hides_it` | 删除作品后目录从磁盘消失（进入回收站），默认与含归档列表均为空，按作品查素材报 `not_found` |
 | `deleting_asset_recycles_file_and_removes_it_from_lists` | 删除素材后文件消失，列表与分区计数归零，记录不可见 |
 | `deleting_missing_asset_still_removes_the_record` | 文件已不在时仍可清理记录 |
+
+### 1.3 第三阶段集成测试（`tests/phase3_flow.rs`）
+
+| 测试 | 验证点 |
+|---|---|
+| `global_search_returns_assets_from_multiple_works` | 跨两个作品检索返回 2 条，`work_name` / `section_key` / 绝对路径均正确；按作品筛选只剩目标作品 |
+| `global_search_matches_work_name_and_section` | 关键词命中作品名；分区筛选只返回该分区素材 |
+| `global_search_tag_filter_does_not_leak_between_works` | 标签过滤只返回关联素材，另一作品素材无该标签 |
+| `global_search_pagination_total_counts_all_works` | 跨作品 total = 3，分页每页 2 条，第二页 1 条 |
+| `global_search_marks_missing_files` | 文件被删后搜索结果状态变为 `missing` |
+| `batch_delete_removes_files_and_reports_failures` | 批量删除 2 个成功、1 个不存在的 id 记为失败；文件离开原位、素材计数归零 |
+| `batch_tags_apply_and_remove_for_all_selected_assets` | 批量加标签 3 条全部成功并可筛选；批量移除后标签清空 |
+| `cache_stats_and_cleanup_do_not_touch_assets` | 缓存统计正确；清理只删缓存文件，原素材与索引保留 |
+| `measure_large_library_queries`（`#[ignore]`） | 生成 5000 条素材并测量检索/排序/分页耗时，需显式运行 |
 | `relocation_requires_confirmation_when_content_differs` | 大小不一致时需确认、不写库；确认后更新路径/大小并重置元数据 |
 | `relocation_accepts_matching_content_without_confirmation` | 哈希一致时直接关联，`hashMatches = true` |
 | `relocation_rejects_files_outside_work_directory` | 作品目录外的文件被拒绝（`invalid_input`） |
 
-### 1.3 前端（`vitest`）
+### 1.4 前端（`vitest`）
 
 | 文件 | 覆盖内容 |
 |---|---|
@@ -64,8 +78,20 @@
 | `src/utils/validation.spec.ts` | 与 Rust 一致的作品名称校验规则 |
 | `src/stores/assets.spec.ts` | 查询参数与分页拼装、缺失数量统计、失败时清空并记录错误、翻页边界、重置筛选、标签增删与错误回传 |
 | `src/stores/imports.spec.ts` | 进度事件应用到对应任务、未知任务忽略、完成信号只触发一次、活动/失败任务分类、移除记录 |
+| `src/stores/globalSearch.spec.ts` | 筛选变更重置分页、分页边界与页数计算、失败时清空结果并记录错误、重置全部筛选 |
 | `src/stores/works.spec.ts` | 删除后从列表移除、删除失败保留记录并回传错误、删除当前作品时清空上下文、恢复归档后替换记录、恢复失败回传后端文案 |
 | `src/components/WorkStatusTag.spec.ts` | 状态文案与标签类型渲染 |
+
+### 1.5 测试分层与说明
+
+| 层级 | 覆盖内容 | 能否代表桌面端 |
+|---|---|---|
+| 单元测试（Rust `#[cfg(test)]`） | 迁移、路径、复制、回收站、备份、缓存、标签规范化 | 否 |
+| Rust 集成测试（`tests/*.rs`） | 创建/导入/搜索/元数据/删除/备份恢复等真实数据库与磁盘流程 | 否（无界面） |
+| 前端单元测试（Vitest） | store 逻辑、格式化与校验函数、组件渲染 | 否 |
+| 浏览器 mock 渲染（截图脚本） | 前端页面在 Edge 中的渲染与交互布局，IPC 由 mock 提供 | **否** |
+| 桌面手工验收 | 真实 Tauri 窗口、系统文件对话框、回收站、托盘行为 | 是（人工执行） |
+| 原生 E2E（tauri-driver） | 未建立，见第 5 节 | — |
 
 ## 2. 质量门槛命令
 
@@ -79,19 +105,31 @@ npm run rust:test     # cargo test
 npm run tauri:build   # 生产构建 + 安装包
 ```
 
-## 3. 实际执行结果（0.2.1，2026-10-24）
+## 3. 实际执行结果（0.3.0，2026-10-25）
 
 | 命令 | 结果 |
 |---|---|
 | `npm run typecheck` | 通过（0 error） |
 | `npm run lint` | 通过（0 error / 0 warning） |
-| `npm run test` | 6 个测试文件、36 个用例全部通过 |
+| `npm run test` | 7 个测试文件、40 个用例全部通过 |
 | `npm run rust:fmt` | 通过 |
 | `npm run rust:clippy` | 通过（`--all-targets -- -D warnings`，无告警） |
-| `npm run rust:test` | 41 单元 + 11 集成（第一阶段）+ 20 集成（第二阶段）= **72 通过** |
-| `npm run tauri:build` | 通过：`src-tauri/target/release/bundle/nsis/CreatorFlow_0.2.1_x64-setup.exe` |
+| `npm run rust:test` | 52 单元 + 11 集成（一阶段）+ 20 集成（二阶段）+ 8 集成（三阶段，另 1 项 `#[ignore]`）= **91 通过** |
+| `npm run tauri:build` | 通过：`src-tauri/target/release/bundle/nsis/CreatorFlow_0.3.0_x64-setup.exe` |
 
-历史结果：0.2.0 为 31 个前端用例、65 个 Rust 测试；0.1.0 为 23 个前端用例、38 个 Rust 测试。
+历史结果：0.2.1 为 36 个前端用例、72 个 Rust 测试；0.2.0 为 31 / 65；0.1.0 为 23 / 38。
+
+**性能测量（debug 构建，5000 条素材，5 个作品）**
+
+| 场景 | 耗时 |
+|---|---|
+| 跨作品首屏（50 条） | 17 ms |
+| 关键词搜索（`素材49`，111 条命中） | 19 ms |
+| 按大小排序 | 23 ms |
+| 末页（offset 4950） | 40 ms |
+| 单作品列表 | 12 ms |
+
+命令：`cargo test --test phase3_flow -- --ignored --nocapture`。数字为未优化 debug 构建，release 构建会更快；此处记录原始测量结果。
 
 **回收站测试说明**：`deleting_work_*` 与 `deleting_asset_*` 会真实调用系统回收站，每次运行会在回收站留下几 KB 的临时文件。
 
@@ -146,10 +184,21 @@ comctl32 v5 并在启动时报 `0xc0000139`。`src-tauri/build.rs` 通过
 27. **删除失败场景**：用播放器占用某个视频文件后再删除该素材 → 应提示「无法将文件移入回收站」，列表中的记录保持不变。
 28. **迁移升级**：保留 0.1.0 的数据库直接安装 0.2.0 并启动 → 旧作品、素材、导入历史均在，日志中出现 `已应用数据库迁移 version=2`、`version=3` 与 `version=4`。
 
+29. **全局搜索**：侧栏进入「全局搜索」→ 不选作品直接搜索某素材片段 → 结果列出多个作品的匹配项，作品列正确；点「打开作品」跳到对应作品与分区；对 `missing` 素材，「定位」为禁用。
+30. **全局筛选组合**：选择作品 + 类型 + 标签 → 结果收窄且总数正确；清除筛选后恢复全部。
+31. **数据库备份**：设置页点「立即备份」→ 列表出现新备份，状态「可恢复」，结构版本与当前一致；备份目录中应同时有 `.db` 与 `.db.json`。
+32. **备份校验**：对同一备份点「校验」→ 提示结构版本与完整性问题均正常。
+33. **恢复**：先新建一个作品，再恢复刚才的备份 → 应用自动刷新，新作品消失，原有作品仍在；备份目录出现 `pre-restore-*.db`。
+34. **拒绝无效备份**：把一个文本文件改名为 `.db` 放进备份目录 → 刷新后状态为「不可用」，「恢复」按钮禁用。
+35. **缓存管理**：设置页查看缓存占用与文件数；把上限改小后保存 → 提示生效值；点「清理全部缓存」→ 占用归零，回到作品页浏览，缩略图会重新生成。
+36. **批量操作**：在素材列表勾选多条 → 出现「已选 N 项」；批量添加标签后所有选中项出现该标签；批量移除后消失；批量移入回收站后列表移除且系统回收站中有对应文件。
+
 ## 5. 已知未覆盖
 
 - 无 Playwright/Tauri 端到端自动化：当前以手动验收步骤 + 单元/集成测试覆盖。
 - 未覆盖真实磁盘写满、只读目录、网络盘断开等场景的自动化测试。
 - 视频封面生成依赖本机 ffmpeg，未在自动化测试中验证（无稳定测试样本）。
 - 回收站被文件占用而失败的分支未自动化（需要独占打开文件），只做了手动验收步骤。
+- **原生桌面 E2E 不可用（已实测）**：`tauri-driver 2.1.0` 可安装、`msedgedriver 155.0.4283.62` 与 WebView2 版本匹配、`POST /session` 能返回 sessionId，但应用在自动化模式下没有创建 `msedgewebview2.exe`，随后命令全部返回 `invalid session id`。浏览器 mock 截图只验证前端渲染，**不能**视为桌面端验收通过。
+- 备份恢复的「切换文件失败」「迁移失败回滚」分支只有代码路径与设计说明，未能在自动化中构造（需要注入文件系统故障）。
 - 原生窗口内容无法自动截图（WebView2 合成层限制），界面验证使用浏览器渲染截图。
